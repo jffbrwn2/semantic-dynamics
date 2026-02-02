@@ -1,0 +1,27 @@
+[project]
+name = "feature-dynamics"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Jeff Lab", email = "jdotcafe@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib>=3.10.8",
+    "numpy>=2.2.6",
+    "pandas>=2.3.3",
+    "sae-lens>=1.0.0",
+    "scikit-learn>=1.7.2",
+    "torch>=2.10.0",
+    "tqdm>=4.67.2",
+    "transformers>=4.57.6",
+    "typeguard>=4.4.4",
+]
+
+[project.scripts]
+feature-dynamics = "feature_dynamics:main"
+
+[build-system]
+requires = ["uv_build>=0.9.17,<0.10.0"]
+build-backend = "uv_build"
