@@ -9,12 +9,12 @@ class Config:
     """Configuration for the feature dynamics experiment."""
 
     # Model configuration
-    model_name: str = "google/gemma-2-27b-it"
-    layer_idx: int = 20  # Layer to extract SAE activations from
+    model_name: str = "google/gemma-3-27b-it"
+    layer_idx: int = 31  # Layer to extract SAE activations from
 
     # SAE configuration
     # Gemma Scope 2 SAE hook point format: "blocks.{layer}.hook_resid_post"
-    sae_release: str = "gemma-scope-2-27b-it-resid_post"  # Gemma Scope 2 release name
+    sae_release: str = "gemma-scope-2-27b-it-res"  # Gemma Scope 2 release name
     sae_id: str = None  # Will be set based on layer_idx (format: "layer_X/width_16k/average_l0_71")
     top_k_features: int = 512  # Restrict to top-K features by variance
 
@@ -51,9 +51,7 @@ class Config:
             ]
 
         if self.sae_id is None:
-            # Format: "layer_20/width_16k/average_l0_71"
-            # Using 16k width and medium sparsity as default
-            self.sae_id = f"layer_{self.layer_idx}/width_16k/average_l0_71"
+            self.sae_id = f"layer_{self.layer_idx}_width_16k_l0_medium"
 
         # Create directories
         self.output_dir.mkdir(exist_ok=True, parents=True)

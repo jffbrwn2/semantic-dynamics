@@ -7,9 +7,9 @@ from pathlib import Path
 import pickle
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from sae_lens import SparseAutoencoder
+from sae_lens import SAE 
 
-from .config import Config
+from config import Config
 
 
 class DataCollector:
@@ -27,9 +27,14 @@ class DataCollector:
 
         print(f"Loading model {config.model_name}...")
         self.tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+
+        # Ensure pad_token is set (required for Gemma models)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
         self.model = AutoModelForCausalLM.from_pretrained(
             config.model_name,
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
             device_map=device if device == "cuda" else None,
         )
 
@@ -41,7 +46,7 @@ class DataCollector:
         print(f"Loading SAE for layer {config.layer_idx}...")
         self.sae = self._load_sae()
 
-    def _load_sae(self) -> SparseAutoencoder:
+    def _load_sae(self) -> SAE:
         """Load the SAE from Gemma Scope.
 
         Returns:
@@ -50,7 +55,7 @@ class DataCollector:
         # Load SAE from Gemma Scope 2
         # Format: release="gemma-scope-2-27b-it-resid_post"
         #         sae_id="layer_20/width_16k/average_l0_71"
-        sae, cfg_dict, sparsity = SparseAutoencoder.from_pretrained(
+        sae, cfg_dict, sparsity = SAE.from_pretrained(
             release=self.config.sae_release,
             sae_id=self.config.sae_id,
             device=str(self.device)
@@ -94,16 +99,22 @@ class DataCollector:
 
         # Generate with hooks to collect activations
         with torch.no_grad():
-            generated = self.model.generate(
-                inputs.input_ids,
-                max_new_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                do_sample=True,
-                pad_token_id=self.tokenizer.pad_token_id,
-                return_dict_in_generate=True,
-                output_hidden_states=True,
-            )
+            try:
+                generated = self.model.generate(
+                    inputs.input_ids,
+                    max_new_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    return_dict_in_generate=True,
+                    output_hidden_states=True,
+                )
+            except RuntimeError as e:
+                print(f"Error during generation: {e}")
+                print(f"Prompt: {prompt[:100]}...")
+                return None
 
             # Get generated token IDs (excluding prompt)
             generated_ids = generated.sequences[0, prompt_len:]
