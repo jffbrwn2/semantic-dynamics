@@ -84,7 +84,12 @@ def plot_feature_timeseries(data, feature_indices=None, n_features=5, n_sequence
             ax.set_yscale('log')
         else:
             ax.axhline(y=0, color='black', linestyle='--', alpha=0.3)  # zero line for pre_relu
-        ax.set_ylabel(f"{d['style']}")
+        # Show prompt on left side
+        prompt_text = d.get('prompt', d.get('style', f'Seq {seq_idx}'))
+        # Truncate long prompts for display
+        if len(prompt_text) > 50:
+            prompt_text = prompt_text[:47] + '...'
+        ax.set_ylabel(prompt_text, fontsize=8)
         ax.grid(True, alpha=0.3)
 
         # Add tokens along top of plot
@@ -109,14 +114,16 @@ def plot_feature_timeseries(data, feature_indices=None, n_features=5, n_sequence
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize SAE dynamics")
-    parser.add_argument("--cache-dir", type=Path, default=Path(".cache"))
+    parser.add_argument("--cache-dir", type=Path, default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/.cache"))
     parser.add_argument("--output", type=Path, default=Path("outputs/feature_timeseries/"))
     parser.add_argument("--n-sequences", type=int, default=5)
     parser.add_argument("--n-features", type=int, default=5)
     parser.add_argument("--mode", choices=['spiky', 'persistent', 'both'], default='spiky',
                         help="Feature selection: spiky (high variance), persistent (high mean, low CV), or both")
-    parser.add_argument("--pre-relu", action="store_true",
-                        help="Plot pre-ReLU activations (can be negative)")
+    parser.add_argument("--pre-relu", action="store_true", default=True,
+                        help="Plot pre-ReLU activations (can be negative, default: True)")
+    parser.add_argument("--no-pre-relu", action="store_false", dest="pre_relu",
+                        help="Plot post-ReLU SAE activations")
     args = parser.parse_args()
 
     print("Loading cached data...")

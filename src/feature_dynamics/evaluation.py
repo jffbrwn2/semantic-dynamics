@@ -1,9 +1,14 @@
 """Evaluation metrics for feature predictors."""
 
 import numpy as np
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from sklearn.metrics import r2_score
 import pandas as pd
+
+
+def get_act_key(use_pre_relu: bool) -> str:
+    """Get the activation key based on use_pre_relu flag."""
+    return 'pre_relu' if use_pre_relu else 'sae_acts'
 
 
 def compute_r2_per_feature(
@@ -84,6 +89,7 @@ def evaluate_predictors(
     token_predictor,
     state_token_predictor,
     epsilon: float = 0.05,
+    use_pre_relu: Optional[bool] = None,
 ) -> Dict:
     """Evaluate both predictors on a dataset.
 
@@ -92,6 +98,7 @@ def evaluate_predictors(
         token_predictor: Fitted TokenOnlyPredictor
         state_token_predictor: Fitted StateTokenPredictor
         epsilon: Threshold for meaningful improvement
+        use_pre_relu: If True, use pre_relu activations. If None, infer from predictor.
 
     Returns:
         Dictionary containing:
@@ -101,8 +108,13 @@ def evaluate_predictors(
             - state_token_metrics: Aggregate metrics for state+token
             - comparison: Comparison metrics
     """
+    # Determine activation key
+    if use_pre_relu is None:
+        use_pre_relu = getattr(token_predictor, 'use_pre_relu', True)
+    act_key = get_act_key(use_pre_relu)
+
     # Extract ground truth
-    y_true = [data['sae_acts'][1:] for data in dataset]
+    y_true = [data[act_key][1:] for data in dataset]
 
     # Token-only predictions
     token_preds = token_predictor.predict(dataset)
@@ -158,6 +170,7 @@ def analyze_by_style(
     dataset: List[Dict],
     token_predictor,
     state_token_predictor,
+    use_pre_relu: Optional[bool] = None,
 ) -> pd.DataFrame:
     """Analyze predictor performance by prompt style.
 
@@ -165,10 +178,16 @@ def analyze_by_style(
         dataset: Test dataset
         token_predictor: Fitted TokenOnlyPredictor
         state_token_predictor: Fitted StateTokenPredictor
+        use_pre_relu: If True, use pre_relu activations. If None, infer from predictor.
 
     Returns:
         DataFrame with per-style metrics
     """
+    # Determine activation key
+    if use_pre_relu is None:
+        use_pre_relu = getattr(token_predictor, 'use_pre_relu', True)
+    act_key = get_act_key(use_pre_relu)
+
     styles = set(d['style'] for d in dataset)
     results = []
 
@@ -179,7 +198,7 @@ def analyze_by_style(
             continue
 
         # Evaluate on this style
-        y_true = [data['sae_acts'][1:] for data in style_data]
+        y_true = [data[act_key][1:] for data in style_data]
         token_preds = token_predictor.predict(style_data)
         state_token_preds = state_token_predictor.predict(style_data)
 

@@ -170,13 +170,15 @@ class DataCollector:
     def select_top_features(
         self,
         dataset: List[Dict],
-        top_k: int = None
+        top_k: int = None,
+        use_pre_relu: bool = True
     ) -> Tuple[np.ndarray, List[int]]:
         """Select top-K features by variance across dataset.
 
         Args:
             dataset: List of data dictionaries from generate_and_collect
             top_k: Number of features to select (uses config if None)
+            use_pre_relu: If True, use pre_relu activations for variance calculation
 
         Returns:
             (indices of top-K features, feature variances)
@@ -184,8 +186,9 @@ class DataCollector:
         if top_k is None:
             top_k = self.config.top_k_features
 
-        # Concatenate all SAE activations
-        all_acts = np.concatenate([d['sae_acts'] for d in dataset], axis=0)
+        # Concatenate activations
+        act_key = 'pre_relu' if use_pre_relu else 'sae_acts'
+        all_acts = np.concatenate([d[act_key] for d in dataset], axis=0)
 
         # Compute variance per feature
         feature_vars = np.var(all_acts, axis=0)
