@@ -102,8 +102,8 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("outputs"),
-        help="Output directory (default: outputs)"
+        default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs"),
+        help="Output directory (default: /home/jffbrwn/orcd/pool/semantic-dynamics/outputs)"
     )
     parser.add_argument(
         "--pre-relu",

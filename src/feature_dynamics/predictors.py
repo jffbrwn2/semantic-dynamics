@@ -383,6 +383,23 @@ class SequenceDataset(Dataset):
         return torch.FloatTensor(inputs), torch.FloatTensor(targets)
 
 
+class LSTMModel(nn.Module):
+    """LSTM model for sequence prediction."""
+
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
+        super().__init__()
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x, hidden=None):
+        # x: (batch, seq_len, input_dim)
+        lstm_out, hidden = self.lstm(x, hidden)
+        # lstm_out: (batch, seq_len, hidden_dim)
+        output = self.fc(lstm_out)
+        # output: (batch, seq_len, output_dim)
+        return output, hidden
+
+
 class RNNTokenOnlyPredictor:
     """RNN-based token-only predictor: h_t, x_{t+1} = RNN(u_t, h_{t-1}).
 
@@ -434,20 +451,6 @@ class RNNTokenOnlyPredictor:
         if self.hidden_size is None:
             self.hidden_size = self.n_features
 
-        class LSTMModel(nn.Module):
-            def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
-                super().__init__()
-                self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
-                self.fc = nn.Linear(hidden_dim, output_dim)
-
-            def forward(self, x, hidden=None):
-                # x: (batch, seq_len, input_dim)
-                lstm_out, hidden = self.lstm(x, hidden)
-                # lstm_out: (batch, seq_len, hidden_dim)
-                output = self.fc(lstm_out)
-                # output: (batch, seq_len, output_dim)
-                return output, hidden
-
         self.model = LSTMModel(
             self.embed_dim,
             self.hidden_size,
@@ -483,13 +486,15 @@ class RNNTokenOnlyPredictor:
 
         return sequences
 
-    def fit(self, dataset: List[Dict], embed_matrix: np.ndarray, per_feature: bool = False):
+    def fit(self, dataset: List[Dict], embed_matrix: np.ndarray, per_feature: bool = False,
+            val_dataset: List[Dict] = None):
         """Fit RNN token-only predictor.
 
         Args:
             dataset: Training dataset
             embed_matrix: Token embedding matrix
             per_feature: Ignored (kept for API compatibility)
+            val_dataset: Optional validation dataset
         """
         self.embed_matrix = embed_matrix
         self.embed_dim = embed_matrix.shape[1]
@@ -512,6 +517,22 @@ class RNNTokenOnlyPredictor:
             for inp, tgt in sequences
         ]
 
+        # Prepare validation data if provided
+        val_loader = None
+        if val_dataset is not None:
+            val_sequences = self._prepare_sequences(val_dataset, embed_matrix)
+            val_scaled_sequences = [
+                (self.scaler_x.transform(inp), self.scaler_y.transform(tgt))
+                for inp, tgt in val_sequences
+            ]
+            val_dataset_obj = SequenceDataset(val_scaled_sequences)
+            val_loader = DataLoader(
+                val_dataset_obj,
+                batch_size=self.batch_size,
+                shuffle=False,
+                collate_fn=self._collate_fn
+            )
+
         # Build model
         self._build_model()
 
@@ -528,8 +549,9 @@ class RNNTokenOnlyPredictor:
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         criterion = nn.MSELoss()
 
-        self.model.train()
         for epoch in range(self.epochs):
+            # Training
+            self.model.train()
             total_loss = 0
             for batch_inputs, batch_targets in train_loader:
                 batch_inputs = batch_inputs.to(self.device)
@@ -543,9 +565,26 @@ class RNNTokenOnlyPredictor:
 
                 total_loss += loss.item()
 
-            if (epoch + 1) % 5 == 0:
-                avg_loss = total_loss / len(train_loader)
-                print(f"  Epoch {epoch+1}/{self.epochs}, Loss: {avg_loss:.6f}")
+            avg_train_loss = total_loss / len(train_loader)
+
+            # Validation
+            if val_loader is not None:
+                self.model.eval()
+                val_loss = 0
+                with torch.no_grad():
+                    for batch_inputs, batch_targets in val_loader:
+                        batch_inputs = batch_inputs.to(self.device)
+                        batch_targets = batch_targets.to(self.device)
+                        outputs, _ = self.model(batch_inputs)
+                        loss = criterion(outputs, batch_targets)
+                        val_loss += loss.item()
+                avg_val_loss = val_loss / len(val_loader)
+
+                if (epoch + 1) % 5 == 0:
+                    print(f"  Epoch {epoch+1}/{self.epochs}, Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
+            else:
+                if (epoch + 1) % 5 == 0:
+                    print(f"  Epoch {epoch+1}/{self.epochs}, Train Loss: {avg_train_loss:.6f}")
 
     def _collate_fn(self, batch):
         """Collate function for variable length sequences."""
@@ -667,17 +706,6 @@ class RNNStateTokenPredictor:
 
         input_dim = self.n_features + self.embed_dim
 
-        class LSTMModel(nn.Module):
-            def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
-                super().__init__()
-                self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
-                self.fc = nn.Linear(hidden_dim, output_dim)
-
-            def forward(self, x, hidden=None):
-                lstm_out, hidden = self.lstm(x, hidden)
-                output = self.fc(lstm_out)
-                return output, hidden
-
         self.model = LSTMModel(
             input_dim,
             self.hidden_size,
@@ -714,13 +742,15 @@ class RNNStateTokenPredictor:
 
         return sequences
 
-    def fit(self, dataset: List[Dict], embed_matrix: np.ndarray, per_feature: bool = False):
+    def fit(self, dataset: List[Dict], embed_matrix: np.ndarray, per_feature: bool = False,
+            val_dataset: List[Dict] = None):
         """Fit RNN state+token predictor.
 
         Args:
             dataset: Training dataset
             embed_matrix: Token embedding matrix
             per_feature: Ignored (kept for API compatibility)
+            val_dataset: Optional validation dataset
         """
         self.embed_matrix = embed_matrix
         self.embed_dim = embed_matrix.shape[1]
@@ -749,6 +779,26 @@ class RNNStateTokenPredictor:
             targets_scaled = self.scaler_y.transform(targets)
             scaled_sequences.append((inputs, targets_scaled))
 
+        # Prepare validation data if provided
+        val_loader = None
+        if val_dataset is not None:
+            val_sequences = self._prepare_sequences(val_dataset, embed_matrix)
+            val_scaled_sequences = []
+            for states, embeds, targets in val_sequences:
+                states_scaled = self.scaler_state.transform(states)
+                embeds_scaled = self.scaler_embed.transform(embeds)
+                inputs = np.concatenate([states_scaled, embeds_scaled], axis=1)
+                targets_scaled = self.scaler_y.transform(targets)
+                val_scaled_sequences.append((inputs, targets_scaled))
+
+            val_dataset_obj = SequenceDataset(val_scaled_sequences)
+            val_loader = DataLoader(
+                val_dataset_obj,
+                batch_size=self.batch_size,
+                shuffle=False,
+                collate_fn=self._collate_fn
+            )
+
         # Build model
         self._build_model()
 
@@ -765,8 +815,9 @@ class RNNStateTokenPredictor:
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         criterion = nn.MSELoss()
 
-        self.model.train()
         for epoch in range(self.epochs):
+            # Training
+            self.model.train()
             total_loss = 0
             for batch_inputs, batch_targets in train_loader:
                 batch_inputs = batch_inputs.to(self.device)
@@ -780,9 +831,26 @@ class RNNStateTokenPredictor:
 
                 total_loss += loss.item()
 
-            if (epoch + 1) % 5 == 0:
-                avg_loss = total_loss / len(train_loader)
-                print(f"  Epoch {epoch+1}/{self.epochs}, Loss: {avg_loss:.6f}")
+            avg_train_loss = total_loss / len(train_loader)
+
+            # Validation
+            if val_loader is not None:
+                self.model.eval()
+                val_loss = 0
+                with torch.no_grad():
+                    for batch_inputs, batch_targets in val_loader:
+                        batch_inputs = batch_inputs.to(self.device)
+                        batch_targets = batch_targets.to(self.device)
+                        outputs, _ = self.model(batch_inputs)
+                        loss = criterion(outputs, batch_targets)
+                        val_loss += loss.item()
+                avg_val_loss = val_loss / len(val_loader)
+
+                if (epoch + 1) % 5 == 0:
+                    print(f"  Epoch {epoch+1}/{self.epochs}, Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
+            else:
+                if (epoch + 1) % 5 == 0:
+                    print(f"  Epoch {epoch+1}/{self.epochs}, Train Loss: {avg_train_loss:.6f}")
 
     def _collate_fn(self, batch):
         """Collate function for variable length sequences."""

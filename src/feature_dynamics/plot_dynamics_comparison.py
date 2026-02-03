@@ -401,7 +401,7 @@ def plot_r2_scatter(data, predictors, use_pre_relu=True, output_path=None):
 def main():
     parser = argparse.ArgumentParser(description="Compare actual vs predicted dynamics")
     parser.add_argument("--cache-dir", type=Path, default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/.cache"))
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
+    parser.add_argument("--output-dir", type=Path, default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs"))
     parser.add_argument("--output", type=Path, default=None,
                         help="Output file path (default: outputs/dynamics_comparison/)")
     parser.add_argument("--models", nargs='+',

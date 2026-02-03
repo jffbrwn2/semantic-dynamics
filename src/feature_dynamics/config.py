@@ -37,8 +37,8 @@ class Config:
     fit_per_feature: bool = True  # Fit separate model per feature vs joint
 
     # Output
-    output_dir: Path = Path("outputs")
-    cache_dir: Path = Path(".cache")
+    output_dir: Path = Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs")
+    cache_dir: Path = Path("/home/jffbrwn/orcd/pool/semantic-dynamics/.cache")
 
     def __post_init__(self):
         """Initialize derived configuration."""

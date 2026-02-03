@@ -115,7 +115,7 @@ def plot_feature_timeseries(data, feature_indices=None, n_features=5, n_sequence
 def main():
     parser = argparse.ArgumentParser(description="Visualize SAE dynamics")
     parser.add_argument("--cache-dir", type=Path, default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/.cache"))
-    parser.add_argument("--output", type=Path, default=Path("outputs/feature_timeseries/"))
+    parser.add_argument("--output", type=Path, default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs/feature_timeseries/"))
     parser.add_argument("--n-sequences", type=int, default=5)
     parser.add_argument("--n-features", type=int, default=5)
     parser.add_argument("--mode", choices=['spiky', 'persistent', 'both'], default='spiky',
