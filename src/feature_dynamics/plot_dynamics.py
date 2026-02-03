@@ -27,13 +27,47 @@ def load_data(cache_dir: Path):
     return train_data
 
 
-def plot_feature_timeseries(data, feature_indices=None, n_features=5, n_sequences=5, output_path=None):
-    """Plot individual feature activations over time, one subplot per sequence."""
+def plot_feature_timeseries(data, feature_indices=None, n_features=5, n_sequences=5,
+                            output_path=None, mode='spiky', use_pre_relu=False):
+    """Plot individual feature activations over time, one subplot per sequence.
+
+    Args:
+        mode: 'spiky' (high variance), 'persistent' (high mean, low CV), or 'both'
+        use_pre_relu: if True, plot pre-ReLU activations (can be negative)
+    """
+    act_key = 'pre_relu' if use_pre_relu else 'sae_acts'
+
+    if use_pre_relu and 'pre_relu' not in data[0]:
+        print("Warning: pre_relu not in data, need to re-collect. Using sae_acts.")
+        act_key = 'sae_acts'
+
     if feature_indices is None:
-        # Pick top features by variance
-        all_acts = np.concatenate([d['sae_acts'] for d in data], axis=0)
-        variances = np.var(all_acts, axis=0)
-        feature_indices = np.argsort(variances)[-n_features:]
+        all_acts = np.concatenate([d[act_key] for d in data], axis=0)
+
+        if mode == 'spiky':
+            # High variance features
+            variances = np.var(all_acts, axis=0)
+            feature_indices = np.argsort(variances)[-n_features:]
+        elif mode == 'persistent':
+            # High mean, low coefficient of variation
+            means = np.mean(all_acts, axis=0)
+            stds = np.std(all_acts, axis=0)
+            cv = stds / (means + 1e-8)  # coefficient of variation
+            # Score: high mean, low cv
+            score = means / (cv + 1e-8)
+            feature_indices = np.argsort(score)[-n_features:]
+        elif mode == 'both':
+            # Half spiky, half persistent
+            variances = np.var(all_acts, axis=0)
+            spiky = np.argsort(variances)[-(n_features // 2):]
+
+            means = np.mean(all_acts, axis=0)
+            stds = np.std(all_acts, axis=0)
+            cv = stds / (means + 1e-8)
+            score = means / (cv + 1e-8)
+            persistent = np.argsort(score)[-(n_features - n_features // 2):]
+
+            feature_indices = np.concatenate([persistent, spiky])
 
     # Wide figure to spread out tokens
     seq_len = len(data[0]['sae_acts'])
@@ -43,10 +77,13 @@ def plot_feature_timeseries(data, feature_indices=None, n_features=5, n_sequence
 
     for seq_idx, (ax, d) in enumerate(zip(axes, data[:n_sequences])):
         for feat in feature_indices:
-            acts = d['sae_acts'][:, feat]
+            acts = d[act_key][:, feat]
             ax.plot(acts, alpha=0.7, label=f'Feature {feat}' if seq_idx == 0 else None)
 
-        ax.set_yscale('log')
+        if not use_pre_relu:
+            ax.set_yscale('log')
+        else:
+            ax.axhline(y=0, color='black', linestyle='--', alpha=0.3)  # zero line for pre_relu
         ax.set_ylabel(f"{d['style']}")
         ax.grid(True, alpha=0.3)
 
@@ -73,18 +110,27 @@ def plot_feature_timeseries(data, feature_indices=None, n_features=5, n_sequence
 def main():
     parser = argparse.ArgumentParser(description="Visualize SAE dynamics")
     parser.add_argument("--cache-dir", type=Path, default=Path(".cache"))
-    parser.add_argument("--output", type=Path, default=Path("outputs/feature_timeseries.png"))
+    parser.add_argument("--output", type=Path, default=Path("outputs/feature_timeseries/"))
     parser.add_argument("--n-sequences", type=int, default=5)
     parser.add_argument("--n-features", type=int, default=5)
+    parser.add_argument("--mode", choices=['spiky', 'persistent', 'both'], default='spiky',
+                        help="Feature selection: spiky (high variance), persistent (high mean, low CV), or both")
+    parser.add_argument("--pre-relu", action="store_true",
+                        help="Plot pre-ReLU activations (can be negative)")
     args = parser.parse_args()
 
     print("Loading cached data...")
     data = load_data(args.cache_dir)
     print(f"Loaded {len(data)} sequences")
+    if args.pre_relu:
+        args.output = args.output / f"mode_{args.mode}_pre_relu.png"
+    else:
+        args.output = args.output / f"mode_{args.mode}.png"
 
     args.output.parent.mkdir(exist_ok=True, parents=True)
     plot_feature_timeseries(data, n_features=args.n_features,
-                            n_sequences=args.n_sequences, output_path=args.output)
+                            n_sequences=args.n_sequences, output_path=args.output,
+                            mode=args.mode, use_pre_relu=args.pre_relu)
 
 
 if __name__ == "__main__":

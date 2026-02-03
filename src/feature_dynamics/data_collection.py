@@ -94,6 +94,7 @@ class DataCollector:
 
         # Storage for activations
         all_sae_acts = []
+        all_pre_relu = []
         all_token_ids = []
         all_metadata = []
 
@@ -132,6 +133,9 @@ class DataCollector:
                 sae_acts = self.sae.encode(hidden.unsqueeze(0))  # (1, n_features)
                 sae_acts = sae_acts.squeeze(0).cpu().numpy()  # (n_features,)
 
+                # Also compute pre-ReLU activations
+                pre_relu = (hidden.float() @ self.sae.W_enc + self.sae.b_enc).cpu().numpy()  # (n_features,)
+
                 # Get token info
                 token_id = generated_ids[step_idx].item()
                 token = self.tokenizer.decode([token_id])
@@ -145,6 +149,7 @@ class DataCollector:
                 }
 
                 all_sae_acts.append(sae_acts)
+                all_pre_relu.append(pre_relu)
                 all_token_ids.append(token_id)
                 all_metadata.append(metadata)
 
@@ -155,6 +160,7 @@ class DataCollector:
 
         return {
             'sae_acts': np.array(all_sae_acts),  # (seq_len, n_features)
+            'pre_relu': np.array(all_pre_relu),  # (seq_len, n_features)
             'token_ids': np.array(all_token_ids),  # (seq_len,)
             'tokens': [self.tokenizer.decode([tid]) for tid in all_token_ids],
             'metadata': all_metadata,
@@ -251,6 +257,8 @@ class DataCollector:
         for data in dataset:
             subset_data = data.copy()
             subset_data['sae_acts'] = data['sae_acts'][:, top_k_indices]
+            if 'pre_relu' in data:
+                subset_data['pre_relu'] = data['pre_relu'][:, top_k_indices]
             subset_dataset.append(subset_data)
 
         return subset_dataset
