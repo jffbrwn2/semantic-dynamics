@@ -7,10 +7,10 @@ import torch
 import numpy as np
 from transformers import AutoModel
 
-from config import Config
-from prompts import PromptGenerator
-from data_collection import DataCollector
-from predictors import TokenOnlyPredictor, StateTokenPredictor, save_predictor, load_predictor
+from feature_dynamics.config import Config
+from feature_dynamics.prompts import PromptGenerator
+from feature_dynamics.data_collection import DataCollector
+from feature_dynamics.predictors import TokenOnlyPredictor, StateTokenPredictor, save_predictor, load_predictor
 
 
 def load_embedding_matrix(model_name: str, cache_dir: Path, device: str = "cpu") -> np.ndarray:
@@ -45,7 +45,7 @@ def load_embedding_matrix(model_name: str, cache_dir: Path, device: str = "cpu")
     return embed_matrix
 
 
-from evaluation import (
+from feature_dynamics.evaluation import (
     evaluate_predictors,
     print_evaluation_results,
     analyze_by_style,

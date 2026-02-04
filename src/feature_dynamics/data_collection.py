@@ -9,7 +9,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from sae_lens import SAE 
 
-from config import Config
+from feature_dynamics.config import Config
 
 
 class DataCollector:

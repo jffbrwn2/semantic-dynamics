@@ -171,6 +171,26 @@ class TokenOnlyPredictor:
 
         return np.array(trajectory)
 
+    # Generation interface methods
+    def reset(self, initial_features: np.ndarray = None):
+        """Reset predictor state. TokenOnly has no state to reset."""
+        pass
+
+    def predict_next(self, token_embed: np.ndarray, previous_features: np.ndarray = None) -> np.ndarray:
+        """Predict next features from token embedding.
+
+        Args:
+            token_embed: Token embedding vector (embed_dim,)
+            previous_features: Ignored for TokenOnly predictor
+
+        Returns:
+            Predicted features (n_features,)
+        """
+        token_embed_scaled = self.scaler_x.transform(token_embed.reshape(1, -1))[0]
+        pred_scaled = token_embed_scaled @ self.B + self.intercept
+        pred = self.scaler_y.inverse_transform(pred_scaled.reshape(1, -1))[0]
+        return pred
+
 
 class StateTokenPredictor:
     """State+token predictor: x_{t+1} ≈ A x_t + B u_t.
@@ -198,6 +218,7 @@ class StateTokenPredictor:
         self.scaler_state = StandardScaler()
         self.scaler_embed = StandardScaler()
         self.scaler_y = StandardScaler()
+        self._current_state = None  # For generation interface
 
     def _prepare_data(self, dataset: List[Dict], embed_matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Prepare training data.
@@ -361,6 +382,51 @@ class StateTokenPredictor:
 
         return np.array(trajectory)
 
+    # Generation interface methods
+    def reset(self, initial_features: np.ndarray = None):
+        """Reset predictor state.
+
+        Args:
+            initial_features: Initial SAE features to use as state
+        """
+        self._current_state = initial_features.copy() if initial_features is not None else None
+
+    def predict_next(self, token_embed: np.ndarray, previous_features: np.ndarray = None) -> np.ndarray:
+        """Predict next features from token embedding and previous features.
+
+        Args:
+            token_embed: Token embedding vector (embed_dim,)
+            previous_features: Previous SAE features (n_features,)
+                             If None, uses internal _current_state
+
+        Returns:
+            Predicted features (n_features,)
+        """
+        # Use provided features or internal state
+        if previous_features is None:
+            previous_features = self._current_state
+        if previous_features is None:
+            raise ValueError("previous_features must be provided or reset() must be called first")
+
+        # Scale inputs
+        token_embed_scaled = self.scaler_embed.transform(token_embed.reshape(1, -1))[0]
+        state_scaled = self.scaler_state.transform(previous_features.reshape(1, -1))[0]
+
+        # Predict
+        pred_scaled = (
+            state_scaled @ self.A +
+            token_embed_scaled @ self.B +
+            self.intercept
+        )
+
+        # Inverse transform
+        pred = self.scaler_y.inverse_transform(pred_scaled.reshape(1, -1))[0]
+
+        # Update internal state
+        self._current_state = pred.copy()
+
+        return pred
+
 
 class SequenceDataset(Dataset):
     """Dataset for sequence prediction."""
@@ -445,6 +511,7 @@ class RNNTokenOnlyPredictor:
         self.model = None
         self.scaler_x = StandardScaler()
         self.scaler_y = StandardScaler()
+        self._hidden = None  # For generation interface
 
     def _build_model(self):
         """Build LSTM model."""
@@ -652,6 +719,37 @@ class RNNTokenOnlyPredictor:
 
         return np.array(trajectory)
 
+    # Generation interface methods
+    def reset(self, initial_features: np.ndarray = None):
+        """Reset RNN hidden state to None."""
+        self._hidden = None
+
+    def predict_next(self, token_embed: np.ndarray, previous_features: np.ndarray = None) -> np.ndarray:
+        """Predict next features from token embedding.
+
+        Args:
+            token_embed: Token embedding vector (embed_dim,)
+            previous_features: Ignored for RNN TokenOnly predictor
+
+        Returns:
+            Predicted features (n_features,)
+        """
+        self.model.eval()
+
+        # Scale input
+        token_embed_scaled = self.scaler_x.transform(token_embed.reshape(1, -1))
+        input_tensor = torch.FloatTensor(token_embed_scaled).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            # Predict with current hidden state
+            output, self._hidden = self.model(input_tensor, self._hidden)
+            output_np = output.squeeze(0).squeeze(0).cpu().numpy()
+
+        # Inverse transform
+        pred = self.scaler_y.inverse_transform(output_np.reshape(1, -1))[0]
+
+        return pred
+
 
 class RNNStateTokenPredictor:
     """RNN-based state+token predictor: h_t, x_{t+1} = RNN([x_t, u_t], h_{t-1}).
@@ -698,6 +796,8 @@ class RNNStateTokenPredictor:
         self.scaler_state = StandardScaler()
         self.scaler_embed = StandardScaler()
         self.scaler_y = StandardScaler()
+        self._hidden = None  # For generation interface
+        self._current_state = None  # For generation interface
 
     def _build_model(self):
         """Build LSTM model."""
@@ -940,6 +1040,56 @@ class RNNStateTokenPredictor:
                 trajectory.append(x_hat.copy())
 
         return np.array(trajectory)
+
+    # Generation interface methods
+    def reset(self, initial_features: np.ndarray = None):
+        """Reset RNN hidden state and SAE feature state.
+
+        Args:
+            initial_features: Initial SAE features to use as state
+        """
+        self._hidden = None
+        self._current_state = initial_features.copy() if initial_features is not None else None
+
+    def predict_next(self, token_embed: np.ndarray, previous_features: np.ndarray = None) -> np.ndarray:
+        """Predict next features from token embedding and previous features.
+
+        Args:
+            token_embed: Token embedding vector (embed_dim,)
+            previous_features: Previous SAE features (n_features,)
+                             If None, uses internal _current_state
+
+        Returns:
+            Predicted features (n_features,)
+        """
+        # Use provided features or internal state
+        if previous_features is None:
+            previous_features = self._current_state
+        if previous_features is None:
+            raise ValueError("previous_features must be provided or reset() must be called first")
+
+        self.model.eval()
+
+        # Scale inputs
+        token_embed_scaled = self.scaler_embed.transform(token_embed.reshape(1, -1))[0]
+        state_scaled = self.scaler_state.transform(previous_features.reshape(1, -1))[0]
+
+        # Concatenate
+        inputs = np.concatenate([state_scaled, token_embed_scaled])
+        input_tensor = torch.FloatTensor(inputs).unsqueeze(0).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            # Predict with current hidden state
+            output, self._hidden = self.model(input_tensor, self._hidden)
+            output_np = output.squeeze(0).squeeze(0).cpu().numpy()
+
+        # Inverse transform
+        pred = self.scaler_y.inverse_transform(output_np.reshape(1, -1))[0]
+
+        # Update internal state
+        self._current_state = pred.copy()
+
+        return pred
 
 
 def save_predictor(predictor, path: Path):
