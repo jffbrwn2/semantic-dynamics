@@ -80,6 +80,7 @@ class PredictorGenerator:
         sae_model: SAEModel,
         tokenizer: AutoTokenizer,
         model: AutoModelForCausalLM,
+        feature_indices: Optional[np.ndarray] = None,
         target_layer: int = 31,
         device: str = "cpu"
     ):
@@ -90,6 +91,7 @@ class PredictorGenerator:
             sae_model: SAE encoder/decoder
             tokenizer: Gemma tokenizer
             model: Gemma model
+            feature_indices: Optional indices to select subset of SAE features
             target_layer: Layer where we intervene with predicted features
             device: Device to run on
         """
@@ -97,6 +99,7 @@ class PredictorGenerator:
         self.sae_model = sae_model
         self.tokenizer = tokenizer
         self.model = model
+        self.feature_indices = feature_indices
         self.target_layer = target_layer
         self.device = device
 
@@ -115,13 +118,14 @@ class PredictorGenerator:
 
         # Determine attention types for position embeddings
         self.config = self.model.config
-        # For multimodal Gemma3, layer_types is in text_config
-        if hasattr(self.config, 'text_config') and hasattr(self.config.text_config, 'layer_types'):
-            self.layer_types = self.config.text_config.layer_types
-        elif hasattr(self.config, 'layer_types'):
-            self.layer_types = self.config.layer_types
+        # For multimodal Gemma3, layer_types and other settings are in text_config
+        # We need to use text_config for mask creation as well
+        if hasattr(self.config, 'text_config'):
+            self.text_config = self.config.text_config
+            self.layer_types = self.text_config.layer_types if hasattr(self.text_config, 'layer_types') else None
         else:
-            self.layer_types = None
+            self.text_config = self.config
+            self.layer_types = self.config.layer_types if hasattr(self.config, 'layer_types') else None
 
     def _create_causal_mask_mapping(
         self,
@@ -141,9 +145,9 @@ class PredictorGenerator:
         Returns:
             Dictionary mapping attention type to mask tensor
         """
-        # Base mask arguments
+        # Base mask arguments - use text_config for multimodal models
         mask_kwargs = {
-            "config": self.config,
+            "config": self.text_config,
             "input_embeds": input_embeds,
             "attention_mask": None,  # We use default causal masking
             "cache_position": cache_position,
@@ -197,29 +201,24 @@ class PredictorGenerator:
             )
 
             # Compute position embeddings for both attention types
-            position_embeddings = {}
-            if self.layer_types:
-                for layer_type in set(self.layer_types):
-                    position_embeddings[layer_type] = self.lm.rotary_emb(
-                        hidden_states, position_ids, layer_type
-                    )
+            position_embeddings_global = self.lm.rotary_emb(hidden_states, position_ids)
+            position_embeddings_local = self.lm.rotary_emb_local(hidden_states, position_ids)
 
             # Run through layers 0 to target_layer (0-31)
             for layer_idx in range(self.target_layer + 1):
                 layer = self.layers[layer_idx]
 
-                # Get position embedding and mask for this layer's attention type
-                layer_pos_emb = None
+                # Get mask for this layer's attention type
                 layer_mask = None
                 if self.layer_types and layer_idx < len(self.layer_types):
                     layer_type = self.layer_types[layer_idx]
-                    layer_pos_emb = position_embeddings.get(layer_type)
                     layer_mask = causal_mask_mapping.get(layer_type)
 
                 layer_outputs = layer(
                     hidden_states,
                     attention_mask=layer_mask,
-                    position_embeddings=layer_pos_emb,
+                    position_embeddings_global=position_embeddings_global,
+                    position_embeddings_local=position_embeddings_local,
                     position_ids=position_ids,
                     cache_position=cache_position,
                 )
@@ -228,8 +227,12 @@ class PredictorGenerator:
             # hidden_states now contains layer 31 output: (1, prefix_len, d_model)
 
             # Extract SAE features from last token
-            last_hidden = hidden_states[0, -1].cpu().numpy()  # (d_model,)
+            last_hidden = hidden_states[0, -1].float().cpu().numpy()  # (d_model,)
             sae_features = self.sae_model.encode(last_hidden)
+
+            # Apply feature selection if indices provided
+            if self.feature_indices is not None:
+                sae_features = sae_features[self.feature_indices]
 
             # Now build KV cache for layers 32-61
             past_key_values = DynamicCache()
@@ -237,21 +240,20 @@ class PredictorGenerator:
             for layer_idx in range(self.target_layer + 1, self.num_layers):
                 layer = self.layers[layer_idx]
 
-                # Get position embedding and mask for this layer
-                layer_pos_emb = None
+                # Get mask for this layer
                 layer_mask = None
                 if self.layer_types and layer_idx < len(self.layer_types):
                     layer_type = self.layer_types[layer_idx]
-                    layer_pos_emb = position_embeddings.get(layer_type)
                     layer_mask = causal_mask_mapping.get(layer_type)
 
                 layer_outputs = layer(
                     hidden_states,
                     attention_mask=layer_mask,
-                    position_embeddings=layer_pos_emb,
+                    position_embeddings_global=position_embeddings_global,
+                    position_embeddings_local=position_embeddings_local,
                     position_ids=position_ids,
                     cache_position=cache_position,
-                    past_key_value=past_key_values,
+                    past_key_values=past_key_values,
                     use_cache=True,
                 )
                 hidden_states = layer_outputs[0]
@@ -264,14 +266,14 @@ class PredictorGenerator:
 
     def _run_upper_layers(
         self,
-        residual: np.ndarray,
+        features: np.ndarray,
         past_key_values: DynamicCache,
         current_position: int
     ) -> tuple[torch.Tensor, DynamicCache]:
         """Run layers 32-61 on reconstructed residual stream with KV cache.
 
         Args:
-            residual: (d_model,) residual stream vector at layer 31
+            features: (n_features,) SAE feature activations (possibly subset)
             past_key_values: KV cache from previous tokens
             current_position: Current position in sequence
 
@@ -281,8 +283,15 @@ class PredictorGenerator:
                 - updated_cache: Updated KV cache
         """
         with torch.no_grad():
-            # Convert residual to tensor
-            hidden_states = torch.FloatTensor(residual).unsqueeze(0).unsqueeze(0).to(self.device)
+            # Expand features back to full space if using subset
+            if self.feature_indices is not None:
+                full_features = np.zeros(self.sae_model.n_features)
+                full_features[self.feature_indices] = features
+                features = full_features
+
+            # Decode features to residual stream and convert to tensor
+            residual = self.sae_model.decode(features)
+            hidden_states = torch.tensor(residual, dtype=self.model.dtype, device=self.device).unsqueeze(0).unsqueeze(0)
             # Shape: (1, 1, d_model) - batch=1, seq=1
 
             # Prepare position inputs for single new token
@@ -298,32 +307,27 @@ class PredictorGenerator:
             )
 
             # Compute position embeddings for new position
-            position_embeddings = {}
-            if self.layer_types:
-                for layer_type in set(self.layer_types):
-                    position_embeddings[layer_type] = self.lm.rotary_emb(
-                        hidden_states, position_ids, layer_type
-                    )
+            position_embeddings_global = self.lm.rotary_emb(hidden_states, position_ids)
+            position_embeddings_local = self.lm.rotary_emb_local(hidden_states, position_ids)
 
             # Run through layers 32-61 with cache
             for layer_idx in range(self.target_layer + 1, self.num_layers):
                 layer = self.layers[layer_idx]
 
-                # Get position embedding and mask for this layer
-                layer_pos_emb = None
+                # Get mask for this layer
                 layer_mask = None
                 if self.layer_types and layer_idx < len(self.layer_types):
                     layer_type = self.layer_types[layer_idx]
-                    layer_pos_emb = position_embeddings.get(layer_type)
                     layer_mask = causal_mask_mapping.get(layer_type)
 
                 layer_outputs = layer(
                     hidden_states,
                     attention_mask=layer_mask,
-                    position_embeddings=layer_pos_emb,
+                    position_embeddings_global=position_embeddings_global,
+                    position_embeddings_local=position_embeddings_local,
                     position_ids=position_ids,
                     cache_position=cache_position,
-                    past_key_value=past_key_values,
+                    past_key_values=past_key_values,
                     use_cache=True,
                 )
                 hidden_states = layer_outputs[0]
@@ -382,12 +386,10 @@ class PredictorGenerator:
                 previous_features=current_features
             )
 
-            # Decode features back to residual stream at layer 31
-            reconstructed_residual = self.sae_model.decode(predicted_features)
-
             # Run upper layers (32-61) to get logits
+            # _run_upper_layers will expand features and decode to residual
             logits, past_key_values = self._run_upper_layers(
-                reconstructed_residual,
+                predicted_features,
                 past_key_values,
                 current_position
             )
@@ -437,6 +439,12 @@ def main():
         type=Path,
         required=True,
         help="Path to SAE model weights"
+    )
+    parser.add_argument(
+        "--feature-indices",
+        type=Path,
+        default=None,
+        help="Path to feature indices pickle file (for top-k feature selection)"
     )
     parser.add_argument(
         "--model-name",
@@ -503,14 +511,27 @@ def main():
     sae_model = SAEModel(args.sae_model)
     print(f"SAE: {sae_model.n_features} features, {sae_model.d_model} dimensions")
 
+    # Load feature indices if provided
+    feature_indices = None
+    if args.feature_indices:
+        print(f"Loading feature indices from {args.feature_indices}...")
+        with open(args.feature_indices, 'rb') as f:
+            feature_data = pickle.load(f)
+            feature_indices = feature_data['indices']
+        print(f"Using {len(feature_indices)} selected features")
+
     # Load Gemma model
     print(f"Loading Gemma model: {args.model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
-        torch_dtype=torch.float32,
-        device_map=args.device
+        dtype=torch.bfloat16 if args.device == "cuda" else torch.float32,
+        device_map=args.device if args.device == "cuda" else None,
     )
+
+    if args.device == "cpu":
+        model = model.to(args.device)
+
     print("Model loaded!\n")
 
     # Create generator
@@ -519,6 +540,7 @@ def main():
         sae_model=sae_model,
         tokenizer=tokenizer,
         model=model,
+        feature_indices=feature_indices,
         device=args.device
     )
 

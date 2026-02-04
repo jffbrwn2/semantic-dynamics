@@ -11,7 +11,7 @@ dependencies = [
     "matplotlib>=3.10.8",
     "numpy>=2.2.6",
     "pandas>=2.3.3",
-    "sae-lens>=1.0.0",
+    "sae-lens>=6.34.2",
     "scikit-learn>=1.7.2",
     "torch>=2.10.0",
     "tqdm>=4.67.2",
@@ -20,7 +20,9 @@ dependencies = [
 ]
 
 [project.scripts]
-feature-dynamics = "feature_dynamics:main"
+feature-dynamics = "feature_dynamics.main:main"
+feature-dynamics-generate = "feature_dynamics.generate:main"
+feature-dynamics-save-sae = "feature_dynamics.save_sae_weights:main"
 
 [build-system]
 requires = ["uv_build>=0.9.17,<0.10.0"]
