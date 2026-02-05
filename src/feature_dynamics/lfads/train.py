@@ -320,6 +320,21 @@ def main():
     # Use train normalization stats for test set
     norm_stats = train_dataset.get_normalization_stats()
 
+    # Save normalization stats for inference
+    if args.normalize and norm_stats is not None:
+        np.savez(
+            args.output_dir / "normalization_stats.npz",
+            mean=norm_stats['mean'],
+            std=norm_stats['std'],
+        )
+        print(f"Saved normalization stats to {args.output_dir / 'normalization_stats.npz'}")
+
+    # Save feature indices if using subset selection
+    if selected_indices is not None:
+        with open(args.output_dir / "feature_indices.pkl", 'wb') as f:
+            pickle.dump({'indices': selected_indices}, f)
+        print(f"Saved feature indices to {args.output_dir / 'feature_indices.pkl'}")
+
     test_dataset = SAEActivationDataset(
         test_data,
         use_pre_relu=args.use_pre_relu,
