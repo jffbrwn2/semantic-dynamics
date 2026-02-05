@@ -1,7 +1,8 @@
 """Predictors for SAE feature evolution."""
 
+import json
 import numpy as np
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Union
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 import pickle
@@ -1092,13 +1093,288 @@ class RNNStateTokenPredictor:
         return pred
 
 
+class LFADSPredictor:
+    """LFADS-based predictor for SAE feature dynamics.
+
+    Uses LFADS encoder on full prefix to infer initial conditions,
+    then runs generator step-by-step with token embeddings as external inputs.
+
+    Supports two modes:
+    - Driven mode (ext_input_dim > 0): Token embeddings fed as external inputs
+    - Autonomous mode (ext_input_dim == 0): Pure dynamics from initial conditions
+    """
+
+    needs_full_prefix = True  # Flag for generate.py to know we need full prefix
+
+    def __init__(
+        self,
+        model,
+        config,
+        norm_mean: Optional[np.ndarray],
+        norm_std: Optional[np.ndarray],
+        feature_indices: Optional[np.ndarray],
+        embedding_projection: Optional[nn.Module],
+        embed_matrix: np.ndarray,
+        n_features_full: int,
+        device: str = "cpu",
+    ):
+        """Initialize LFADS predictor.
+
+        Args:
+            model: Trained LFADS model
+            config: LFADSConfig dataclass
+            norm_mean: Normalization mean (n_features,)
+            norm_std: Normalization std (n_features,)
+            feature_indices: Indices of selected features (for subset)
+            embedding_projection: Optional projection layer for token embeddings
+            embed_matrix: Token embedding matrix (vocab_size, embed_dim)
+            n_features_full: Full number of SAE features (before subset selection)
+            device: Device to run on
+        """
+        self.model = model
+        self.config = config
+        self.norm_mean = norm_mean
+        self.norm_std = norm_std
+        self.feature_indices = feature_indices
+        self.embedding_projection = embedding_projection
+        self.embed_matrix = embed_matrix
+        self.n_features_full = n_features_full
+        self.device = device
+
+        # Runtime state
+        self._generator_state = None
+
+        # Detect mode from config
+        self.is_autonomous = (config.ext_input_dim == 0)
+
+    def _normalize(self, features: np.ndarray) -> np.ndarray:
+        """Apply z-score normalization."""
+        if self.norm_mean is not None:
+            return (features - self.norm_mean) / self.norm_std
+        return features
+
+    def _denormalize(self, features: np.ndarray) -> np.ndarray:
+        """Reverse z-score normalization."""
+        if self.norm_mean is not None:
+            return features * self.norm_std + self.norm_mean
+        return features
+
+    def _select_features(self, features: np.ndarray) -> np.ndarray:
+        """Apply feature subset selection."""
+        if self.feature_indices is not None:
+            if features.ndim == 1:
+                return features[self.feature_indices]
+            return features[:, self.feature_indices]
+        return features
+
+    def _expand_features(self, features: np.ndarray) -> np.ndarray:
+        """Expand subset features back to full space."""
+        if self.feature_indices is not None:
+            full = np.zeros(self.n_features_full)
+            full[self.feature_indices] = features
+            return full
+        return features
+
+    def reset(self, prefix_features: np.ndarray):
+        """Encode full prefix sequence to initialize generator.
+
+        Args:
+            prefix_features: (seq_len, n_features_full) raw SAE features
+        """
+        # Select feature subset
+        features = self._select_features(prefix_features)
+
+        # Normalize
+        features = self._normalize(features)
+
+        # Convert to tensor: (1, seq_len, n_features)
+        x = torch.tensor(features, dtype=torch.float32).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            # Encode to get IC posterior
+            _, ic_mean, ic_logvar, ic_sample = self.model.encode(x)
+
+            # Map IC to generator initial state
+            g0 = self.model.ic_to_g0(ic_sample)  # (1, gen_dim)
+
+        self._generator_state = g0
+
+    def predict_next(
+        self,
+        token_embed: np.ndarray,
+        previous_features: np.ndarray = None
+    ) -> np.ndarray:
+        """Predict next SAE features using LFADS generator.
+
+        In autonomous mode: ignores token_embed
+        In driven mode: uses token_embed as external input
+
+        Args:
+            token_embed: (embed_dim,) token embedding
+            previous_features: Ignored for LFADS (uses internal state)
+
+        Returns:
+            Predicted features (n_features_full,) denormalized
+        """
+        if self._generator_state is None:
+            raise ValueError("Must call reset() before predict_next()")
+
+        with torch.no_grad():
+            # Prepare input based on mode
+            if self.is_autonomous:
+                inp = torch.zeros(1, 1, device=self.device)
+            else:
+                # Project token embedding
+                embed_t = torch.tensor(token_embed, dtype=torch.float32)
+                embed_t = embed_t.unsqueeze(0).to(self.device)  # (1, embed_dim)
+                if self.embedding_projection is not None:
+                    inp = self.embedding_projection(embed_t)  # (1, proj_dim)
+                else:
+                    inp = embed_t
+
+            # Single GRU step
+            g = self.model.generator.gru_cell(inp, self._generator_state)
+
+            # Compute factors
+            factors = self.model.generator.fac_linear(g)  # (1, fac_dim)
+
+            # Decode factors to features
+            if self.config.likelihood == "gaussian":
+                pred = self.model.dec_mean(factors)  # (1, n_features)
+            else:
+                # For Poisson/ZIP, use rates as predictions
+                pred = self.model.decoder(factors)
+
+            # Update state
+            self._generator_state = g
+
+        # Convert to numpy and denormalize
+        pred = pred.squeeze(0).cpu().numpy()
+        pred = self._denormalize(pred)
+
+        # Expand to full feature space
+        pred = self._expand_features(pred)
+
+        return pred
+
+
+def load_lfads_predictor(
+    output_dir: Path,
+    embed_matrix: np.ndarray,
+    device: str = "cpu",
+) -> LFADSPredictor:
+    """Load trained LFADS model as a predictor.
+
+    Args:
+        output_dir: Directory containing LFADS training outputs
+        embed_matrix: Token embedding matrix for external inputs
+        device: Device to load model on
+
+    Returns:
+        Configured LFADSPredictor instance
+    """
+    # Import LFADS modules here to avoid circular imports
+    from feature_dynamics.lfads.model import LFADS, LFADSConfig
+
+    output_dir = Path(output_dir)
+
+    # Load model config
+    with open(output_dir / "model_config.json") as f:
+        config_dict = json.load(f)
+    config = LFADSConfig(**config_dict)
+
+    # Create and load model
+    model = LFADS(config)
+    checkpoint = torch.load(output_dir / "best.pt", map_location=device, weights_only=False)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.to(device)
+    model.eval()
+
+    # Load training args for additional info
+    with open(output_dir / "args.json") as f:
+        args = json.load(f)
+
+    # Load normalization stats
+    norm_mean = None
+    norm_std = None
+    norm_path = output_dir / "normalization_stats.npz"
+    if norm_path.exists():
+        norm_data = np.load(norm_path)
+        norm_mean = norm_data['mean']
+        norm_std = norm_data['std']
+
+    # Load feature indices
+    feature_indices = None
+    feature_indices_path = output_dir / "feature_indices.pkl"
+    if feature_indices_path.exists():
+        with open(feature_indices_path, 'rb') as f:
+            feature_indices = pickle.load(f)['indices']
+
+    # Create embedding projection if model used token embeddings
+    embedding_projection = None
+    if config.ext_input_dim > 0:
+        project_dim = args.get('embed_project_dim')
+        if project_dim is not None:
+            embedding_projection = nn.Linear(embed_matrix.shape[1], project_dim)
+            embedding_projection.to(device)
+            embedding_projection.eval()
+
+            # Load projection weights from checkpoint if available
+            if 'embedding_projection_state_dict' in checkpoint:
+                embedding_projection.load_state_dict(
+                    checkpoint['embedding_projection_state_dict']
+                )
+
+    # Determine full feature count (before subset selection)
+    # This should match the SAE model's feature count
+    n_features_full = 16384  # Default for Gemma Scope SAEs
+    if feature_indices is not None:
+        # The model's n_features is the subset size
+        # We need the original full size
+        pass  # n_features_full stays at default
+
+    return LFADSPredictor(
+        model=model,
+        config=config,
+        norm_mean=norm_mean,
+        norm_std=norm_std,
+        feature_indices=feature_indices,
+        embedding_projection=embedding_projection,
+        embed_matrix=embed_matrix,
+        n_features_full=n_features_full,
+        device=device,
+    )
+
+
 def save_predictor(predictor, path: Path):
     """Save predictor to disk."""
     with open(path, 'wb') as f:
         pickle.dump(predictor, f)
 
 
-def load_predictor(path: Path):
-    """Load predictor from disk."""
+def load_predictor(
+    path: Path,
+    embed_matrix: np.ndarray = None,
+    device: str = "cpu"
+):
+    """Load predictor from disk.
+
+    Args:
+        path: Path to predictor file (.pkl) or LFADS output directory
+        embed_matrix: Token embedding matrix (required for LFADS predictors)
+        device: Device for LFADS models
+
+    Returns:
+        Loaded predictor instance
+    """
+    path = Path(path)
+
+    # Check if this is an LFADS output directory
+    if path.is_dir() and (path / "model_config.json").exists():
+        if embed_matrix is None:
+            raise ValueError("embed_matrix required for LFADS predictor")
+        return load_lfads_predictor(path, embed_matrix, device)
+
+    # Otherwise load pickle file (existing behavior)
     with open(path, 'rb') as f:
         return pickle.load(f)

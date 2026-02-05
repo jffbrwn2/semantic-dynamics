@@ -6,6 +6,7 @@ stream and running the remaining layers (32-61) to generate text.
 """
 
 import argparse
+import json
 import pickle
 from pathlib import Path
 from typing import Dict, Optional
@@ -19,7 +20,7 @@ from transformers.masking_utils import (
     create_sliding_window_causal_mask
 )
 
-from predictors import load_predictor
+from feature_dynamics.predictors import load_predictor
 
 
 class SAEModel:
@@ -249,13 +250,20 @@ class PredictorGenerator:
 
             # hidden_states now contains layer 31 output: (1, prefix_len, d_model)
 
-            # Extract SAE features from last token
-            last_hidden = hidden_states[0, -1].float().cpu().numpy()  # (d_model,)
-            sae_features = self.sae_model.encode(last_hidden)
+            # Extract SAE features from ALL positions
+            all_hidden = hidden_states[0].float().cpu().numpy()  # (prefix_len, d_model)
+            all_sae_features = np.array([
+                self.sae_model.encode(all_hidden[t])
+                for t in range(prefix_len)
+            ])  # (prefix_len, n_features)
+
+            # Last token features (for backward compatibility with non-LFADS predictors)
+            last_sae_features = all_sae_features[-1]
 
             # Apply feature selection if indices provided
             if self.feature_indices is not None:
-                sae_features = sae_features[self.feature_indices]
+                all_sae_features = all_sae_features[:, self.feature_indices]
+                last_sae_features = last_sae_features[self.feature_indices]
 
             # Now build KV cache for layers 32-61
             past_key_values = DynamicCache()
@@ -282,7 +290,8 @@ class PredictorGenerator:
                 hidden_states = layer_outputs[0]
 
         return {
-            'sae_features': sae_features,
+            'all_sae_features': all_sae_features,  # (prefix_len, n_features)
+            'sae_features': last_sae_features,     # (n_features,) - backward compat
             'past_key_values': past_key_values,
             'prefix_len': prefix_len
         }
@@ -389,7 +398,11 @@ class PredictorGenerator:
         prefix_output = self._run_prefix(input_ids)
 
         # Initialize predictor with prefix features
-        self.predictor.reset(prefix_output['sae_features'])
+        # LFADS predictors need full prefix sequence, others need only last token
+        if hasattr(self.predictor, 'needs_full_prefix') and self.predictor.needs_full_prefix:
+            self.predictor.reset(prefix_output['all_sae_features'])
+        else:
+            self.predictor.reset(prefix_output['sae_features'])
 
         # Get last token embedding for prediction
         last_token_id = input_ids[-1].item()
@@ -511,6 +524,12 @@ def main():
         action="store_true",
         help="Also generate baseline text with normal Gemma for comparison"
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Path to save output (JSON format with prompt, generated text, etc.)"
+    )
 
     args = parser.parse_args()
 
@@ -523,11 +542,6 @@ def main():
     print(f"Prompt: {args.prompt}")
     print(f"Device: {args.device}")
     print("="*80 + "\n")
-
-    # Load predictor
-    print("Loading predictor...")
-    predictor = load_predictor(args.predictor)
-    print(f"Loaded predictor: {type(predictor).__name__}")
 
     # Load SAE model
     print("Loading SAE model...")
@@ -543,7 +557,7 @@ def main():
             feature_indices = feature_data['indices']
         print(f"Using {len(feature_indices)} selected features")
 
-    # Load Gemma model
+    # Load Gemma model (needed before loading LFADS predictors for embed_matrix)
     print(f"Loading Gemma model: {args.model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     model = AutoModelForCausalLM.from_pretrained(
@@ -556,6 +570,14 @@ def main():
         model = model.to(args.device)
 
     print("Model loaded!\n")
+
+    # Get embedding matrix for LFADS predictors
+    embed_matrix = model.model.language_model.embed_tokens.weight.detach().cpu().numpy()
+
+    # Load predictor (LFADS needs embed_matrix)
+    print("Loading predictor...")
+    predictor = load_predictor(args.predictor, embed_matrix=embed_matrix, device=args.device)
+    print(f"Loaded predictor: {type(predictor).__name__}")
 
     # Create generator
     generator = PredictorGenerator(
@@ -581,6 +603,7 @@ def main():
     print("-" * 80 + "\n")
 
     # Optional baseline comparison
+    baseline_text = None
     if args.compare_baseline:
         print("Generating baseline (normal Gemma)...")
         print("-" * 80)
@@ -597,6 +620,26 @@ def main():
         print(f"Prompt: {args.prompt}")
         print(f"Generated: {baseline_text}")
         print("-" * 80 + "\n")
+
+    # Save output if requested
+    if args.output:
+        output_data = {
+            "prompt": args.prompt,
+            "generated": generated_text,
+            "predictor": str(args.predictor),
+            "predictor_type": type(predictor).__name__,
+            "model": args.model_name,
+            "max_tokens": args.max_tokens,
+            "temperature": args.temperature,
+            "top_k": args.top_k,
+        }
+        if baseline_text is not None:
+            output_data["baseline"] = baseline_text
+
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        with open(args.output, 'w') as f:
+            json.dump(output_data, f, indent=2)
+        print(f"Output saved to {args.output}")
 
 
 if __name__ == "__main__":
