@@ -21,13 +21,22 @@ def extract_sae_weights(sae: SAE) -> dict:
         sae: Loaded SAE from sae_lens
 
     Returns:
-        Dictionary with encoder/decoder weights
+        Dictionary with encoder/decoder weights and JumpReLU threshold
     """
+    # Detect activation function from config class name or threshold presence
+    config_class_name = type(sae.cfg).__name__
+    if 'JumpReLU' in config_class_name or hasattr(sae, 'threshold'):
+        activation_fn = 'jumprelu'
+    else:
+        activation_fn = 'relu'
+
     weights = {
         'encoder_weight': sae.W_enc.detach().cpu().numpy(),  # (d_model, n_features)
         'encoder_bias': sae.b_enc.detach().cpu().numpy(),     # (n_features,)
         'decoder_weight': sae.W_dec.detach().cpu().numpy(),  # (n_features, d_model)
         'decoder_bias': sae.b_dec.detach().cpu().numpy() if hasattr(sae, 'b_dec') else None,  # (d_model,) or None
+        'threshold': sae.threshold.detach().cpu().numpy() if hasattr(sae, 'threshold') else None,  # (n_features,) for JumpReLU
+        'activation_fn': activation_fn,
     }
 
     return weights
@@ -113,6 +122,11 @@ def main():
         print(f"Decoder bias shape: {weights['decoder_bias'].shape}")
     else:
         print("Decoder bias: None")
+    print(f"Activation function: {weights['activation_fn']}")
+    if weights['threshold'] is not None:
+        print(f"Threshold shape: {weights['threshold'].shape}")
+    else:
+        print("Threshold: None (using standard ReLU)")
     print()
 
     # Save to pickle

@@ -23,7 +23,7 @@ from predictors import load_predictor
 
 
 class SAEModel:
-    """Wrapper for SAE encoder/decoder."""
+    """Wrapper for SAE encoder/decoder with JumpReLU activation."""
 
     def __init__(self, sae_path: Path):
         """Load SAE model from path.
@@ -34,12 +34,26 @@ class SAEModel:
         with open(sae_path, 'rb') as f:
             sae_data = pickle.load(f)
 
-        # Extract encoder and decoder
-        # Format depends on how SAE is saved
         self.encoder_weight = sae_data['encoder_weight']  # (d_model, n_features)
         self.encoder_bias = sae_data['encoder_bias']  # (n_features,)
         self.decoder_weight = sae_data['decoder_weight']  # (n_features, d_model)
         self.decoder_bias = sae_data.get('decoder_bias', None)  # (d_model,) or None
+
+        # JumpReLU parameters - required for Gemma Scope SAEs
+        self.activation_fn = sae_data.get('activation_fn')
+        self.threshold = sae_data.get('threshold')
+
+        if self.activation_fn is None:
+            raise ValueError(
+                "SAE weights file missing 'activation_fn'. "
+                "Re-run save_sae_weights.py to extract with threshold parameter."
+            )
+
+        if self.activation_fn == 'jumprelu' and self.threshold is None:
+            raise ValueError(
+                f"SAE uses {self.activation_fn} but threshold is missing. "
+                "Re-run save_sae_weights.py to extract threshold."
+            )
 
         self.n_features = self.encoder_weight.shape[1]
         self.d_model = self.encoder_weight.shape[0]
@@ -51,10 +65,19 @@ class SAEModel:
             residual: (d_model,) residual stream vector
 
         Returns:
-            SAE features (n_features,) after ReLU
+            SAE features (n_features,) after activation
         """
-        pre_relu = residual @ self.encoder_weight + self.encoder_bias
-        return np.maximum(0, pre_relu)
+        hidden_pre = residual @ self.encoder_weight + self.encoder_bias
+
+        if self.activation_fn == 'jumprelu':
+            # JumpReLU: relu(x) * (x > threshold)
+            base_acts = np.maximum(0, hidden_pre)
+            jump_mask = (hidden_pre > self.threshold).astype(base_acts.dtype)
+            return base_acts * jump_mask
+        elif self.activation_fn == 'relu':
+            return np.maximum(0, hidden_pre)
+        else:
+            raise ValueError(f"Unsupported activation function: {self.activation_fn}")
 
     def decode(self, features: np.ndarray) -> np.ndarray:
         """Decode SAE features back to residual stream.
