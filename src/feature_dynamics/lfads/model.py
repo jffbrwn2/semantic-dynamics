@@ -38,6 +38,11 @@ class LFADSConfig:
     # External inputs (optional - for known inputs like token embeddings)
     ext_input_dim: int = 0  # External input dimensionality
 
+    # Temporal resolution
+    substeps_per_token: int = 1  # Number of generator substeps per token
+    # When > 1, the generator evolves for N substeps per token, with external
+    # input held constant (sustained). Output rates are summed across substeps.
+
     # Architecture
     dropout: float = 0.1
     clip_val: float = 5.0  # Gradient clipping value
@@ -120,42 +125,60 @@ class Generator(nn.Module):
         g0: torch.Tensor,
         seq_len: int,
         inputs: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        substeps_per_token: int = 1,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         """
         Args:
             g0: (batch, gen_dim) initial generator state
-            seq_len: number of timesteps to generate
-            inputs: (batch, seq_len, input_dim) optional inputs at each timestep
+            seq_len: number of token timesteps to generate
+            inputs: (batch, seq_len, input_dim) optional inputs at each token timestep
+            substeps_per_token: number of substeps per token (for smoother dynamics)
 
         Returns:
-            gen_states: (batch, seq_len, gen_dim) generator hidden states
-            factors: (batch, seq_len, fac_dim) latent factors
+            gen_states: (batch, seq_len, gen_dim) generator states at token boundaries
+            factors: (batch, seq_len, fac_dim) latent factors at token boundaries
+            substep_factors: (batch, seq_len, substeps_per_token, fac_dim) if substeps > 1,
+                            else None. Contains factors at each substep for rate summation.
         """
         batch_size = g0.size(0)
         device = g0.device
 
-        gen_states = []
-        factors = []
+        gen_states = []  # States at token boundaries
+        factors = []  # Factors at token boundaries (last substep)
+        substep_factors_all = [] if substeps_per_token > 1 else None
 
         g = g0
         for t in range(seq_len):
+            # Get input for this token (held constant across substeps)
             if inputs is not None and self.input_dim > 0:
                 inp = inputs[:, t, :]
             else:
                 # Dummy input of zeros
                 inp = torch.zeros(batch_size, 1, device=device)
 
-            g = self.gru_cell(inp, g)
-            gen_states.append(g)
+            # Run substeps with sustained input
+            substep_factors = []
+            for s in range(substeps_per_token):
+                g = self.gru_cell(inp, g)
+                f = self.fac_linear(self.dropout(g))
+                substep_factors.append(f)
 
-            # Compute factors
-            f = self.fac_linear(self.dropout(g))
-            factors.append(f)
+            # Store token-level outputs (final substep state/factor)
+            gen_states.append(g)
+            factors.append(substep_factors[-1])
+
+            # Store all substep factors if using substeps
+            if substeps_per_token > 1:
+                substep_factors_all.append(torch.stack(substep_factors, dim=1))
 
         gen_states = torch.stack(gen_states, dim=1)  # (batch, seq_len, gen_dim)
         factors = torch.stack(factors, dim=1)  # (batch, seq_len, fac_dim)
 
-        return gen_states, factors
+        if substeps_per_token > 1:
+            # (batch, seq_len, substeps_per_token, fac_dim)
+            substep_factors_all = torch.stack(substep_factors_all, dim=1)
+
+        return gen_states, factors, substep_factors_all
 
 
 class Controller(nn.Module):
@@ -365,13 +388,15 @@ class LFADS(nn.Module):
 
         Returns:
             Dictionary containing:
-                - recon_params: decoder output parameters
+                - recon_params: decoder output parameters (rates summed over substeps if substeps > 1)
                 - ic_mean, ic_logvar: IC posterior
                 - ci_mean, ci_logvar (if controller): inferred input posteriors
-                - factors: (batch, seq_len, fac_dim) latent factors
-                - gen_states: (batch, seq_len, gen_dim) generator states
+                - factors: (batch, seq_len, fac_dim) latent factors at token boundaries
+                - gen_states: (batch, seq_len, gen_dim) generator states at token boundaries
+                - substep_factors: (batch, seq_len, substeps, fac_dim) if substeps > 1
         """
         batch_size, seq_len, _ = x.size()
+        substeps = self.config.substeps_per_token
 
         # Encode
         enc_outputs, ic_mean, ic_logvar, ic_sample = self.encode(x)
@@ -393,8 +418,10 @@ class LFADS(nn.Module):
                 # 2. Run controller to get inferred inputs
                 # 3. Re-run generator with inferred inputs
 
-                # First pass: no inputs
-                _, init_factors = self.generator(g0, seq_len, inputs=None)
+                # First pass: no inputs (use substeps to get consistent factors)
+                _, init_factors, _ = self.generator(
+                    g0, seq_len, inputs=None, substeps_per_token=substeps
+                )
 
                 # Controller pass
                 c0 = self.c0_linear(enc_outputs[:, -1, :])
@@ -409,11 +436,18 @@ class LFADS(nn.Module):
             if inputs_list:
                 gen_inputs = torch.cat(inputs_list, dim=-1)
 
-        # Generate
-        gen_states, factors = self.generator(g0, seq_len, inputs=gen_inputs)
+        # Generate with substeps
+        gen_states, factors, substep_factors = self.generator(
+            g0, seq_len, inputs=gen_inputs, substeps_per_token=substeps
+        )
 
-        # Decode
-        recon_params = self.decode(factors)
+        # Decode - handle substeps by summing rates
+        if substeps > 1 and substep_factors is not None:
+            # Decode all substep factors and sum rates
+            recon_params = self._decode_substeps(substep_factors)
+        else:
+            # Standard single-step decode
+            recon_params = self.decode(factors)
 
         output = {
             "recon_params": recon_params,
@@ -423,11 +457,68 @@ class LFADS(nn.Module):
             "gen_states": gen_states,
         }
 
+        if substeps > 1 and substep_factors is not None:
+            output["substep_factors"] = substep_factors
+
         if self.config.use_controller:
             output["ci_mean"] = ci_mean
             output["ci_logvar"] = ci_logvar
 
         return output
+
+    def _decode_substeps(
+        self,
+        substep_factors: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Decode substep factors and sum rates across substeps.
+
+        Args:
+            substep_factors: (batch, seq_len, substeps, fac_dim)
+
+        Returns:
+            Dictionary with summed rates/parameters at token level
+        """
+        batch, seq_len, substeps, fac_dim = substep_factors.shape
+
+        # Reshape to decode all substeps at once
+        factors_flat = substep_factors.reshape(batch * seq_len * substeps, fac_dim)
+
+        if self.config.likelihood == "poisson":
+            # Decode to get instantaneous rates at each substep
+            rates_flat = self.decoder(factors_flat)
+            rates = rates_flat.reshape(batch, seq_len, substeps, -1)
+            # Sum rates across substeps (integrated firing rate)
+            rates_summed = rates.sum(dim=2)
+            return {"rates": rates_summed}
+
+        elif self.config.likelihood == "gaussian":
+            # For Gaussian, sum the means and average the variance
+            mean_flat = self.dec_mean(factors_flat)
+            logvar_flat = self.dec_logvar(factors_flat)
+
+            mean = mean_flat.reshape(batch, seq_len, substeps, -1)
+            logvar = logvar_flat.reshape(batch, seq_len, substeps, -1)
+
+            # Sum means, combine variances (sum of variances for sum of Gaussians)
+            mean_summed = mean.sum(dim=2)
+            var = torch.exp(logvar)
+            var_summed = var.sum(dim=2)
+            logvar_summed = torch.log(var_summed + 1e-8)
+
+            return {"mean": mean_summed, "logvar": logvar_summed}
+
+        elif self.config.likelihood == "zero_inflated_poisson":
+            rates_flat = self.dec_rate(factors_flat)
+            gate_logits_flat = self.dec_gate(factors_flat)
+
+            rates = rates_flat.reshape(batch, seq_len, substeps, -1)
+            gate_logits = gate_logits_flat.reshape(batch, seq_len, substeps, -1)
+
+            # Sum rates, average gate logits
+            rates_summed = rates.sum(dim=2)
+            gate_logits_avg = gate_logits.mean(dim=2)
+
+            return {"rates": rates_summed, "gate_logits": gate_logits_avg}
 
     def compute_loss(
         self,
@@ -550,13 +641,15 @@ class LFADS(nn.Module):
 
         Args:
             batch_size: number of samples
-            seq_len: sequence length
+            seq_len: sequence length (number of tokens)
             device: torch device
             ext_inputs: optional external inputs
 
         Returns:
             Dictionary with samples and intermediate states
         """
+        substeps = self.config.substeps_per_token
+
         # Sample IC from prior
         ic_sample = torch.randn(batch_size, self.config.ic_dim, device=device)
 
@@ -578,11 +671,16 @@ class LFADS(nn.Module):
             else:
                 gen_inputs = ext_inputs
 
-        # Generate
-        gen_states, factors = self.generator(g0, seq_len, inputs=gen_inputs)
+        # Generate with substeps
+        gen_states, factors, substep_factors = self.generator(
+            g0, seq_len, inputs=gen_inputs, substeps_per_token=substeps
+        )
 
-        # Decode
-        recon_params = self.decode(factors)
+        # Decode - handle substeps by summing rates
+        if substeps > 1 and substep_factors is not None:
+            recon_params = self._decode_substeps(substep_factors)
+        else:
+            recon_params = self.decode(factors)
 
         # Sample observations
         if self.config.likelihood == "poisson":
@@ -602,12 +700,17 @@ class LFADS(nn.Module):
             counts = torch.poisson(rates)
             samples = spike.float() * counts
 
-        return {
+        output = {
             "samples": samples,
             "factors": factors,
             "gen_states": gen_states,
             "recon_params": recon_params,
         }
+
+        if substeps > 1 and substep_factors is not None:
+            output["substep_factors"] = substep_factors
+
+        return output
 
 
 def extract_latent_trajectories(
@@ -624,16 +727,22 @@ def extract_latent_trajectories(
 
     Returns:
         Dictionary with numpy arrays:
-            - factors: (batch, seq_len, fac_dim)
-            - gen_states: (batch, seq_len, gen_dim)
+            - factors: (batch, seq_len, fac_dim) factors at token boundaries
+            - gen_states: (batch, seq_len, gen_dim) generator states at token boundaries
             - ic: (batch, ic_dim) inferred initial conditions
+            - substep_factors: (batch, seq_len, substeps, fac_dim) if substeps > 1
     """
     model.eval()
     with torch.no_grad():
         output = model(x, ext_inputs)
 
-    return {
+    result = {
         "factors": output["factors"].cpu().numpy(),
         "gen_states": output["gen_states"].cpu().numpy(),
         "ic": output["ic_mean"].cpu().numpy(),
     }
+
+    if "substep_factors" in output:
+        result["substep_factors"] = output["substep_factors"].cpu().numpy()
+
+    return result

@@ -152,6 +152,13 @@ def main():
     )
     parser.add_argument("--con-dim", type=int, default=64, help="Controller hidden dim")
     parser.add_argument("--ci-dim", type=int, default=1, help="Controller input dim")
+    parser.add_argument(
+        "--substeps",
+        type=int,
+        default=1,
+        help="Substeps per token for smoother dynamics (default: 1). "
+             "Higher values let dynamics evolve smoothly between tokens.",
+    )
 
     # Training arguments
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
@@ -422,6 +429,7 @@ def main():
         con_dim=args.con_dim,
         ci_dim=args.ci_dim,
         ext_input_dim=ext_input_dim,  # Token embeddings dimension
+        substeps_per_token=args.substeps,
         dropout=args.dropout,
         likelihood=args.likelihood,
         kl_ic_weight=args.kl_ic_weight,
@@ -430,6 +438,8 @@ def main():
 
     model = LFADS(model_config)
     print(model)
+    if args.substeps > 1:
+        print(f"\nUsing {args.substeps} substeps per token for smoother dynamics")
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"\nTotal parameters: {n_params:,}")
@@ -507,15 +517,20 @@ def main():
         model, test_loader, device, embedding_lookup=embedding_lookup
     )
 
-    np.savez(
-        args.output_dir / "test_latents.npz",
-        factors=latents["factors"],
-        ic=latents["ic"],
-        gen_states=latents["gen_states"],
-    )
+    save_dict = {
+        "factors": latents["factors"],
+        "ic": latents["ic"],
+        "gen_states": latents["gen_states"],
+    }
+    if "substep_factors" in latents:
+        save_dict["substep_factors"] = latents["substep_factors"]
+
+    np.savez(args.output_dir / "test_latents.npz", **save_dict)
 
     print(f"\nLatent factor shape: {latents['factors'].shape}")
     print(f"Initial conditions shape: {latents['ic'].shape}")
+    if "substep_factors" in latents:
+        print(f"Substep factors shape: {latents['substep_factors'].shape}")
 
     # =========================================================================
     # Summary

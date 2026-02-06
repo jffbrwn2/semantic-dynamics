@@ -801,9 +801,10 @@ def extract_all_latents(
 
     Returns:
         Dictionary with:
-            - factors: (N, T, fac_dim) latent factors
+            - factors: (N, T, fac_dim) latent factors at token boundaries
             - ic: (N, ic_dim) initial conditions
             - gen_states: (N, T, gen_dim) generator states
+            - substep_factors: (N, T, substeps, fac_dim) if substeps > 1
     """
     model.eval()
     if embedding_lookup is not None:
@@ -812,6 +813,8 @@ def extract_all_latents(
     all_factors = []
     all_ic = []
     all_gen_states = []
+    all_substep_factors = []
+    has_substeps = model.config.substeps_per_token > 1
 
     with torch.no_grad():
         for batch in data_loader:
@@ -823,8 +826,16 @@ def extract_all_latents(
             all_ic.append(output["ic_mean"].cpu().numpy())
             all_gen_states.append(output["gen_states"].cpu().numpy())
 
-    return {
+            if has_substeps and "substep_factors" in output:
+                all_substep_factors.append(output["substep_factors"].cpu().numpy())
+
+    result = {
         "factors": np.concatenate(all_factors, axis=0),
         "ic": np.concatenate(all_ic, axis=0),
         "gen_states": np.concatenate(all_gen_states, axis=0),
     }
+
+    if has_substeps and all_substep_factors:
+        result["substep_factors"] = np.concatenate(all_substep_factors, axis=0)
+
+    return result
