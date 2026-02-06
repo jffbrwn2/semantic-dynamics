@@ -7,10 +7,10 @@ import torch
 import numpy as np
 from transformers import AutoModel
 
-from feature_dynamics.config import Config, _get_default_cache_dir, _get_default_output_dir
+from feature_dynamics.config import Config, _get_default_cache_dir, _get_default_output_dir, get_timestamped_dir
 from feature_dynamics.prompts import PromptGenerator
 from feature_dynamics.data_collection import DataCollector
-from feature_dynamics.predictors import TokenOnlyPredictor, StateTokenPredictor, save_predictor, load_predictor
+from feature_dynamics.predictors import TokenOnlyPredictor, StateTokenPredictor, save_predictor
 
 
 def load_embedding_matrix(model_name: str, cache_dir: Path, device: str = "cpu") -> np.ndarray:
@@ -106,6 +106,11 @@ def main():
         help="Output directory (default: from FEATURE_DYNAMICS_OUTPUT_DIR or ./outputs)"
     )
     parser.add_argument(
+        "--no-timestamp",
+        action="store_true",
+        help="Don't create timestamped subfolder for outputs"
+    )
+    parser.add_argument(
         "--pre-relu",
         action="store_true",
         default=True,
@@ -132,6 +137,12 @@ def main():
 
     args = parser.parse_args()
 
+    # Create timestamped output directory for this run
+    output_dir = args.output_dir
+    if not args.no_timestamp:
+        output_dir = get_timestamped_dir(args.output_dir, "run")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # Initialize config
     config = Config(
         layer_idx=args.layer,
@@ -139,7 +150,7 @@ def main():
         num_prompts=args.num_prompts,
         ridge_alpha=args.alpha,
         cache_dir=args.cache_dir,
-        output_dir=args.output_dir,
+        output_dir=output_dir,
     )
 
     print("="*60)
@@ -152,6 +163,7 @@ def main():
     print(f"Device: {args.device}")
     print(f"Feature selection uses pre-ReLU: {args.select_features_pre_relu}")
     print(f"Training uses pre-ReLU: {args.pre_relu}")
+    print(f"Output directory: {config.output_dir}")
     print("="*60 + "\n")
 
     # Step 1: Generate prompts

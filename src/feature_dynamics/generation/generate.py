@@ -20,6 +20,7 @@ from transformers.masking_utils import (
     create_sliding_window_causal_mask
 )
 
+from ..config import get_timestamped_path
 from ..predictors import load_predictor
 
 
@@ -528,10 +529,20 @@ def main():
         "--output",
         type=Path,
         default=None,
-        help="Path to save output (JSON format with prompt, generated text, etc.)"
+        help="Path to save output (JSON format). If not specified but --output-dir is, creates timestamped file."
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory to save timestamped output file. Use instead of --output for auto-naming."
     )
 
     args = parser.parse_args()
+
+    # Handle output path
+    if args.output is None and args.output_dir is not None:
+        args.output = get_timestamped_path(args.output_dir, "generation", ".json")
 
     print("="*80)
     print("Predictor-Driven Text Generation")

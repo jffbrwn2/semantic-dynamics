@@ -19,7 +19,7 @@ import numpy as np
 from tqdm import tqdm
 from typing import List, Dict, Optional
 
-from ..config import Config, _get_default_cache_dir, _get_default_output_dir
+from ..config import Config, _get_default_cache_dir, _get_default_output_dir, get_timestamped_dir
 from ..data_collection import DataCollector
 
 
@@ -29,6 +29,7 @@ def collect_multi_trial_data(
     trials_per_prompt: int = 20,
     max_tokens: int = 200,
     temperature: float = 0.7,
+    batch_size: int = 4,
     output_path: Optional[Path] = None,
 ) -> Dict[str, List[Dict]]:
     """Collect multiple trials for each prompt.
@@ -39,6 +40,7 @@ def collect_multi_trial_data(
         trials_per_prompt: Number of generations per prompt
         max_tokens: Max tokens per generation
         temperature: Sampling temperature
+        batch_size: Number of trials to generate in parallel
         output_path: Optional path to save results
 
     Returns:
@@ -51,6 +53,7 @@ def collect_multi_trial_data(
             'trials_per_prompt': trials_per_prompt,
             'max_tokens': max_tokens,
             'temperature': temperature,
+            'batch_size': batch_size,
         }
     }
 
@@ -59,20 +62,32 @@ def collect_multi_trial_data(
     for prompt_idx, prompt in enumerate(prompts):
         print(f"\nPrompt {prompt_idx + 1}/{len(prompts)}: {prompt[:50]}...")
         prompt_trials = []
+        trial_id = 0
 
-        for trial in tqdm(range(trials_per_prompt), desc=f"  Trials"):
-            data = collector.generate_and_collect(
+        # Process trials in batches
+        num_batches = (trials_per_prompt + batch_size - 1) // batch_size
+        for batch_idx in tqdm(range(num_batches), desc=f"  Batches"):
+            # Calculate batch size for this iteration (last batch may be smaller)
+            remaining = trials_per_prompt - batch_idx * batch_size
+            current_batch_size = min(batch_size, remaining)
+
+            # Generate batch of trials
+            batch_results = collector.generate_and_collect_batch(
                 prompt,
+                num_trials=current_batch_size,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
 
-            if data is not None:
-                data['prompt_id'] = prompt_idx
-                data['trial_id'] = trial
-                data['condition'] = prompt_idx  # For LFADS: condition = prompt
-                prompt_trials.append(data)
-                all_trials.append(data)
+            # Process results
+            for data in batch_results:
+                if data is not None:
+                    data['prompt_id'] = prompt_idx
+                    data['trial_id'] = trial_id
+                    data['condition'] = prompt_idx  # For LFADS: condition = prompt
+                    prompt_trials.append(data)
+                    all_trials.append(data)
+                trial_id += 1
 
         dataset['trials_by_prompt'][prompt_idx] = prompt_trials
         print(f"  Collected {len(prompt_trials)} valid trials")
@@ -122,6 +137,13 @@ def main():
         help="Number of generations per prompt (default: 20)",
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4,
+        help="Batch size for parallel trial generation (default: 4). "
+             "Higher values use more GPU memory but are faster.",
+    )
+    parser.add_argument(
         "--max-tokens",
         type=int,
         default=200,
@@ -157,8 +179,17 @@ def main():
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device (cuda/cpu)",
     )
+    parser.add_argument(
+        "--no-timestamp",
+        action="store_true",
+        help="Don't create timestamped subfolder for outputs",
+    )
 
     args = parser.parse_args()
+
+    # Create timestamped output directory
+    if not args.no_timestamp:
+        args.output_dir = get_timestamped_dir(args.output_dir)
 
     # Load prompts from file if provided
     if args.prompts_file is not None:
@@ -175,8 +206,10 @@ def main():
     print(f"Total trials: {len(prompts) * args.trials_per_prompt}")
     print(f"Max tokens: {args.max_tokens}")
     print(f"Temperature: {args.temperature}")
+    print(f"Batch size: {args.batch_size}")
     print(f"Layer: {args.layer}")
     print(f"Device: {args.device}")
+    print(f"Output directory: {args.output_dir}")
     print("=" * 60)
 
     # Initialize config and collector
@@ -201,6 +234,7 @@ def main():
         trials_per_prompt=args.trials_per_prompt,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
+        batch_size=args.batch_size,
         output_path=output_path,
     )
 

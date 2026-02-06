@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import argparse
 
-from ..config import _get_default_cache_dir, _get_default_output_dir
+from ..config import _get_default_cache_dir, _get_default_output_dir, get_timestamp
 from ..predictors import load_predictor
 
 
@@ -425,7 +425,12 @@ def main():
                         help="Plot R² scatter comparing first 2 models across all sequences")
     parser.add_argument("--test-data", action="store_true",
                         help="Use test data instead of train data")
+    parser.add_argument("--no-timestamp", action="store_true",
+                        help="Don't add timestamp to output filename")
     args = parser.parse_args()
+
+    # Timestamp suffix
+    timestamp = "" if args.no_timestamp else f"_{get_timestamp()}"
 
     # Load data
     data_file = "test_data.pkl" if args.test_data else "train_data.pkl"
@@ -486,7 +491,8 @@ def main():
         print("Computing R² for all sequences...")
         if args.output is None:
             models_str = "_".join([m.replace('_', '') for m in args.models[:2]])
-            output_path = output_dir / f"r2_scatter_{models_str}_test.png" if args.test_data else output_dir / f"r2_scatter_{models_str}_train.png"
+            data_suffix = "_test" if args.test_data else "_train"
+            output_path = output_dir / f"r2_scatter_{models_str}{data_suffix}{timestamp}.png"
         else:
             output_path = args.output
 
@@ -507,9 +513,9 @@ def main():
     if args.output is None:
         models_str = "_".join([m.replace('_', '') for m in args.models])
         if args.sequence_idx is not None:
-            output_path = output_dir / f"seq_{args.sequence_idx}_mode_{args.mode}_{models_str}.png"
+            output_path = output_dir / f"seq_{args.sequence_idx}_mode_{args.mode}_{models_str}{timestamp}.png"
         else:
-            output_path = output_dir / f"multi_seq_mode_{args.mode}_{models_str}.png"
+            output_path = output_dir / f"multi_seq_mode_{args.mode}_{models_str}{timestamp}.png"
     else:
         output_path = args.output
         output_path.parent.mkdir(exist_ok=True, parents=True)

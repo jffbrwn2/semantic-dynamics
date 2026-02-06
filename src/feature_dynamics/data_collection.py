@@ -167,6 +167,128 @@ class DataCollector:
             'prompt': prompt,
         }
 
+    def generate_and_collect_batch(
+        self,
+        prompt: str,
+        num_trials: int,
+        max_tokens: int = None,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+    ) -> List[Optional[Dict]]:
+        """Generate multiple trials for the same prompt in a batch.
+
+        This is more efficient than calling generate_and_collect multiple times
+        because it batches the model forward passes.
+
+        Args:
+            prompt: Input prompt
+            num_trials: Number of trials to generate
+            max_tokens: Maximum tokens to generate per trial
+            temperature: Sampling temperature
+            top_p: Nucleus sampling parameter
+
+        Returns:
+            List of dictionaries (same format as generate_and_collect), one per trial.
+            Failed generations will be None.
+        """
+        if max_tokens is None:
+            max_tokens = self.config.max_tokens
+
+        # Tokenize prompt and expand to batch
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        prompt_len = inputs.input_ids.shape[1]
+
+        # Expand to batch size
+        batch_input_ids = inputs.input_ids.expand(num_trials, -1)
+        batch_attention_mask = inputs.attention_mask.expand(num_trials, -1)
+
+        # Generate with hooks to collect activations
+        with torch.no_grad():
+            try:
+                generated = self.model.generate(
+                    batch_input_ids,
+                    attention_mask=batch_attention_mask,
+                    max_new_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    return_dict_in_generate=True,
+                    output_hidden_states=True,
+                )
+            except RuntimeError as e:
+                print(f"Error during batch generation: {e}")
+                print(f"Prompt: {prompt[:100]}...")
+                return [None] * num_trials
+
+            # Process each trial in the batch
+            results = []
+            for trial_idx in range(num_trials):
+                # Get generated token IDs for this trial (excluding prompt)
+                generated_ids = generated.sequences[trial_idx, prompt_len:]
+
+                # Find actual sequence length (before padding)
+                # EOS token marks the end of generation
+                eos_positions = (generated_ids == self.tokenizer.eos_token_id).nonzero(as_tuple=True)[0]
+                if len(eos_positions) > 0:
+                    seq_len = eos_positions[0].item() + 1  # Include EOS
+                else:
+                    seq_len = len(generated_ids)
+
+                # Skip if too short
+                if seq_len < self.config.min_tokens:
+                    print(f"Warning: Trial {trial_idx} too short ({seq_len} tokens), skipping")
+                    results.append(None)
+                    continue
+
+                all_sae_acts = []
+                all_pre_relu = []
+                all_token_ids = []
+                all_metadata = []
+
+                # Extract hidden states for each generated token
+                for step_idx in range(seq_len):
+                    # Get hidden state at our layer
+                    # hidden_states[step][layer_idx] has shape (batch, seq=1, d_model)
+                    hidden = generated.hidden_states[step_idx][self.config.layer_idx + 1]
+                    hidden = hidden[trial_idx, -1, :]  # (d_model,)
+
+                    # Pass through SAE encoder
+                    sae_acts = self.sae.encode(hidden.unsqueeze(0))  # (1, n_features)
+                    sae_acts = sae_acts.squeeze(0).cpu().numpy()  # (n_features,)
+
+                    # Also compute pre-ReLU activations
+                    pre_relu = (hidden.float() @ self.sae.W_enc + self.sae.b_enc).cpu().numpy()
+
+                    # Get token info
+                    token_id = generated_ids[step_idx].item()
+                    token = self.tokenizer.decode([token_id])
+
+                    # Metadata
+                    metadata = {
+                        'position': step_idx,
+                        'is_newline': '\n' in token,
+                        'is_punct': token.strip() in '.,!?;:',
+                        'is_space': token.strip() == '',
+                    }
+
+                    all_sae_acts.append(sae_acts)
+                    all_pre_relu.append(pre_relu)
+                    all_token_ids.append(token_id)
+                    all_metadata.append(metadata)
+
+                results.append({
+                    'sae_acts': np.array(all_sae_acts),
+                    'pre_relu': np.array(all_pre_relu),
+                    'token_ids': np.array(all_token_ids),
+                    'tokens': [self.tokenizer.decode([tid]) for tid in all_token_ids],
+                    'metadata': all_metadata,
+                    'prompt': prompt,
+                })
+
+            return results
+
     def select_top_features(
         self,
         dataset: List[Dict],

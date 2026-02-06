@@ -6,6 +6,8 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 
+from feature_dynamics.config import get_timestamped_path
+
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze SAE feature statistics")
@@ -19,7 +21,13 @@ def main():
         "--output",
         type=Path,
         default=None,
-        help="Output path for figure (default: show interactively)",
+        help="Output path for figure. If not specified but --output-dir is, creates timestamped file.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory to save timestamped output file.",
     )
     parser.add_argument(
         "--use-pre-relu",
@@ -38,6 +46,10 @@ def main():
         help="Highlight top-k features by variance (default: 200)",
     )
     args = parser.parse_args()
+
+    # Handle output path
+    if args.output is None and args.output_dir is not None:
+        args.output = get_timestamped_path(args.output_dir, "feature_stats", ".png")
 
     # Load data
     print("Loading data...")

@@ -2,12 +2,49 @@
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+
+def get_timestamp() -> str:
+    """Get current timestamp string for filenames/folders."""
+    return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def get_timestamped_path(base_path: Path, name: str, ext: str = "") -> Path:
+    """Get a timestamped file path.
+
+    Args:
+        base_path: Directory to put the file in
+        name: Base name for the file
+        ext: File extension (e.g., ".json", ".pkl")
+
+    Returns:
+        Path like base_path/name_2025-02-05_19-30-00.ext
+    """
+    timestamp = get_timestamp()
+    return base_path / f"{name}_{timestamp}{ext}"
+
+
+def get_timestamped_dir(base_path: Path, name: str = "") -> Path:
+    """Get a timestamped directory path.
+
+    Args:
+        base_path: Parent directory
+        name: Optional prefix for the folder name
+
+    Returns:
+        Path like base_path/name_2025-02-05_19-30-00/ or base_path/2025-02-05_19-30-00/
+    """
+    timestamp = get_timestamp()
+    if name:
+        return base_path / f"{name}_{timestamp}"
+    return base_path / timestamp
 
 
 def _get_default_cache_dir() -> Path:

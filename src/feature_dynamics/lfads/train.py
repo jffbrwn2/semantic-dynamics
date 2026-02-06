@@ -33,7 +33,7 @@ import pickle
 import json
 from torch.utils.data import DataLoader, random_split
 
-from feature_dynamics.config import _get_default_cache_dir, _get_default_output_dir
+from feature_dynamics.config import _get_default_cache_dir, _get_default_output_dir, get_timestamped_dir
 from feature_dynamics.lfads.model import LFADS, LFADSConfig
 from feature_dynamics.lfads.training import (
     SAEActivationDataset,
@@ -177,6 +177,11 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--val-split", type=float, default=0.1, help="Validation split")
+    parser.add_argument(
+        "--no-timestamp",
+        action="store_true",
+        help="Don't create timestamped subfolder for outputs",
+    )
 
     args = parser.parse_args()
 
@@ -187,8 +192,11 @@ def main():
     device = torch.device(args.device)
     print(f"Using device: {device}")
 
-    # Create output directory
+    # Create timestamped output directory for this run
+    if not args.no_timestamp:
+        args.output_dir = get_timestamped_dir(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory: {args.output_dir}")
 
     # Save config
     with open(args.output_dir / "args.json", "w") as f:

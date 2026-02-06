@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ..config import _get_default_cache_dir, _get_default_output_dir
+from ..config import _get_default_cache_dir, _get_default_output_dir, get_timestamped_dir
 from ..predictors import RNNTokenOnlyPredictor, RNNStateTokenPredictor, save_predictor
 
 
@@ -116,8 +116,15 @@ def main():
                         help="Train only token-only RNN")
     parser.add_argument("--state-token-only", action="store_true",
                         help="Train only state+token RNN")
+    parser.add_argument("--no-timestamp", action="store_true",
+                        help="Don't create timestamped subfolder for outputs")
 
     args = parser.parse_args()
+
+    # Create timestamped output directory
+    if not args.no_timestamp:
+        args.output_dir = get_timestamped_dir(args.output_dir, "rnn")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # Check device availability
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -130,6 +137,7 @@ def main():
     print("="*60)
     print("RNN Predictor Training")
     print("="*60)
+    print(f"Output directory: {args.output_dir}")
     print(f"Device: {args.device}")
     print(f"Hidden size: {args.hidden_size if args.hidden_size else 'n_features'}")
     print(f"Num layers: {args.num_layers}")

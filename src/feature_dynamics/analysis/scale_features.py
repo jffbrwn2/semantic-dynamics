@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-from ..config import _get_default_cache_dir, _get_default_output_dir
+from ..config import _get_default_cache_dir, _get_default_output_dir, get_timestamp
 from ..predictors import TokenOnlyPredictor, StateTokenPredictor
 from ..evaluation import compute_r2_per_feature
 
@@ -198,7 +198,12 @@ def main():
                         help="Ridge regularization parameter")
     parser.add_argument("--pre-relu", action="store_true", default=True)
     parser.add_argument("--no-pre-relu", action="store_false", dest="pre_relu")
+    parser.add_argument("--no-timestamp", action="store_true",
+                        help="Don't add timestamp to output filenames")
     args = parser.parse_args()
+
+    # Timestamp suffix
+    timestamp = "" if args.no_timestamp else f"_{get_timestamp()}"
 
     print("="*60)
     print("Feature Scaling Analysis")
@@ -259,7 +264,7 @@ def main():
     output_dir = args.output_dir / "feature_scaling"
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    results_path = output_dir / "scaling_results.pkl"
+    results_path = output_dir / f"scaling_results{timestamp}.pkl"
     with open(results_path, 'wb') as f:
         pickle.dump({
             'feature_counts': feature_counts,
@@ -270,7 +275,7 @@ def main():
     print(f"\nSaved results to {results_path}")
 
     # Plot
-    plot_path = output_dir / "feature_scaling.png"
+    plot_path = output_dir / f"feature_scaling{timestamp}.png"
     plot_scaling(feature_counts, results_list, plot_path)
 
     # Print summary table

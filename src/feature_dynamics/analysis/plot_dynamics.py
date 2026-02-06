@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import argparse
 
-from ..config import _get_default_cache_dir, _get_default_output_dir
+from ..config import _get_default_cache_dir, _get_default_output_dir, get_timestamp
 
 
 def load_data(cache_dir: Path):
@@ -126,15 +126,18 @@ def main():
                         help="Plot pre-ReLU activations (can be negative, default: True)")
     parser.add_argument("--no-pre-relu", action="store_false", dest="pre_relu",
                         help="Plot post-ReLU SAE activations")
+    parser.add_argument("--no-timestamp", action="store_true",
+                        help="Don't add timestamp to output filename")
     args = parser.parse_args()
 
     print("Loading cached data...")
     data = load_data(args.cache_dir)
     print(f"Loaded {len(data)} sequences")
-    if args.pre_relu:
-        args.output = args.output / f"mode_{args.mode}_pre_relu.png"
-    else:
-        args.output = args.output / f"mode_{args.mode}.png"
+
+    # Construct output filename
+    suffix = "_pre_relu" if args.pre_relu else ""
+    timestamp = "" if args.no_timestamp else f"_{get_timestamp()}"
+    args.output = args.output / f"mode_{args.mode}{suffix}{timestamp}.png"
 
     args.output.parent.mkdir(exist_ok=True, parents=True)
     plot_feature_timeseries(data, n_features=args.n_features,

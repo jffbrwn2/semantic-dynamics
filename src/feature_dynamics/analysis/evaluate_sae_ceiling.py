@@ -24,6 +24,7 @@ from transformers.masking_utils import (
     create_sliding_window_causal_mask
 )
 
+from ..config import get_timestamped_path
 from ..prompts import PromptGenerator
 
 
@@ -674,7 +675,13 @@ def main():
         "--output",
         type=Path,
         default=None,
-        help="Path to save results as JSON (optional)"
+        help="Path to save results as JSON. If not specified but --output-dir is, creates timestamped file."
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory to save timestamped output file. Use instead of --output for auto-naming."
     )
     parser.add_argument(
         "--seed",
@@ -699,6 +706,10 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Handle output path
+    if args.output is None and args.output_dir is not None:
+        args.output = get_timestamped_path(args.output_dir, "sae_ceiling", ".json")
 
     # Default to single prompt if neither specified
     if not args.use_corpus and args.prompt is None:
