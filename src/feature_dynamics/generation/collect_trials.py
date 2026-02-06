@@ -19,7 +19,7 @@ import numpy as np
 from tqdm import tqdm
 from typing import List, Dict, Optional
 
-from ..config import Config
+from ..config import Config, _get_default_cache_dir, _get_default_output_dir
 from ..data_collection import DataCollector
 
 
@@ -142,13 +142,13 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs/trials_data"),
+        default=_get_default_output_dir() / "trials_data",
         help="Output directory",
     )
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/.cache"),
+        default=_get_default_cache_dir(),
         help="Cache directory for models",
     )
     parser.add_argument(

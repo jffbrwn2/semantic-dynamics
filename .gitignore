@@ -48,8 +48,10 @@ coverage.xml
 *.cover
 .hypothesis/
 
-# Project-specific data and outputs
+# Project-specific data and outputs (with and without slash to catch symlinks)
+.cache
 .cache/
+outputs
 outputs/
 logs/
 checkpoints/

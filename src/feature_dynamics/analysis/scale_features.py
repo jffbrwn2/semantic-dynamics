@@ -6,8 +6,9 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-from predictors import TokenOnlyPredictor, StateTokenPredictor
-from evaluation import compute_r2_per_feature
+from ..config import _get_default_cache_dir, _get_default_output_dir
+from ..predictors import TokenOnlyPredictor, StateTokenPredictor
+from ..evaluation import compute_r2_per_feature
 
 
 def load_data(cache_dir: Path, use_pre_relu: bool = True):
@@ -187,9 +188,9 @@ def plot_scaling(feature_counts, results_list, output_path):
 def main():
     parser = argparse.ArgumentParser(description="Analyze feature scaling")
     parser.add_argument("--cache-dir", type=Path,
-                        default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/.cache"))
+                        default=_get_default_cache_dir())
     parser.add_argument("--output-dir", type=Path,
-                        default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs"))
+                        default=_get_default_output_dir())
     parser.add_argument("--feature-counts", nargs='+', type=int,
                         default=[32, 64, 128, 256, 512],
                         help="List of feature counts to test")

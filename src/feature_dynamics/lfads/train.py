@@ -33,6 +33,7 @@ import pickle
 import json
 from torch.utils.data import DataLoader, random_split
 
+from feature_dynamics.config import _get_default_cache_dir, _get_default_output_dir
 from feature_dynamics.lfads.model import LFADS, LFADSConfig
 from feature_dynamics.lfads.training import (
     SAEActivationDataset,
@@ -55,13 +56,13 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=Path,
-        default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/.cache"),
+        default=_get_default_cache_dir(),
         help="Directory containing SAE activation data",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs/lfads"),
+        default=_get_default_output_dir() / "lfads",
         help="Output directory for model checkpoints",
     )
     parser.add_argument(

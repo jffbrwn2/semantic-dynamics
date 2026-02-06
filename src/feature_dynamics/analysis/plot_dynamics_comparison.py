@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import argparse
 
-from predictors import load_predictor
+from ..config import _get_default_cache_dir, _get_default_output_dir
+from ..predictors import load_predictor
 
 
 def load_data(cache_dir: Path, use_pre_relu: bool = True, data_file: str = "train_data.pkl"):
@@ -400,8 +401,8 @@ def plot_r2_scatter(data, predictors, use_pre_relu=True, output_path=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Compare actual vs predicted dynamics")
-    parser.add_argument("--cache-dir", type=Path, default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/.cache"))
-    parser.add_argument("--output-dir", type=Path, default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs"))
+    parser.add_argument("--cache-dir", type=Path, default=_get_default_cache_dir())
+    parser.add_argument("--output-dir", type=Path, default=_get_default_output_dir())
     parser.add_argument("--output", type=Path, default=None,
                         help="Output file path (default: outputs/dynamics_comparison/)")
     parser.add_argument("--models", nargs='+',

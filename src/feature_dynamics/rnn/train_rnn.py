@@ -6,7 +6,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from predictors import RNNTokenOnlyPredictor, RNNStateTokenPredictor, save_predictor
+from ..config import _get_default_cache_dir, _get_default_output_dir
+from ..predictors import RNNTokenOnlyPredictor, RNNStateTokenPredictor, save_predictor
 
 
 def load_data(cache_dir: Path, use_pre_relu: bool = True, data_file: str = "train_data.pkl",
@@ -87,10 +88,10 @@ def subset_features(data, indices, use_pre_relu=True):
 def main():
     parser = argparse.ArgumentParser(description="Train RNN predictors")
     parser.add_argument("--cache-dir", type=Path,
-                        default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/.cache"),
+                        default=_get_default_cache_dir(),
                         help="Cache directory for data")
     parser.add_argument("--output-dir", type=Path,
-                        default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs"),
+                        default=_get_default_output_dir(),
                         help="Output directory for trained models")
     parser.add_argument("--pre-relu", action="store_true", default=True,
                         help="Use pre-ReLU activations (default: True)")

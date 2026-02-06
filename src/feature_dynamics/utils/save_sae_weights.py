@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 from sae_lens import SAE
 
-from ..config import Config
+from ..config import Config, _get_default_output_dir
 
 
 def extract_sae_weights(sae: SAE) -> dict:
@@ -49,7 +49,7 @@ def main():
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs/sae_weights.pkl"),
+        default=_get_default_output_dir() / "sae_weights.pkl",
         help="Output path for SAE weights pickle file"
     )
     parser.add_argument(

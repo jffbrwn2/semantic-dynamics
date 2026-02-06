@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import argparse
 
+from ..config import _get_default_cache_dir, _get_default_output_dir
+
 
 def load_data(cache_dir: Path):
     """Load cached data."""
@@ -114,8 +116,8 @@ def plot_feature_timeseries(data, feature_indices=None, n_features=5, n_sequence
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize SAE dynamics")
-    parser.add_argument("--cache-dir", type=Path, default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/.cache"))
-    parser.add_argument("--output", type=Path, default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs/feature_timeseries/"))
+    parser.add_argument("--cache-dir", type=Path, default=_get_default_cache_dir())
+    parser.add_argument("--output", type=Path, default=_get_default_output_dir() / "feature_timeseries")
     parser.add_argument("--n-sequences", type=int, default=5)
     parser.add_argument("--n-features", type=int, default=5)
     parser.add_argument("--mode", choices=['spiky', 'persistent', 'both'], default='spiky',

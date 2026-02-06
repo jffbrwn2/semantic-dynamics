@@ -7,7 +7,7 @@ import torch
 import numpy as np
 from transformers import AutoModel
 
-from feature_dynamics.config import Config
+from feature_dynamics.config import Config, _get_default_cache_dir, _get_default_output_dir
 from feature_dynamics.prompts import PromptGenerator
 from feature_dynamics.data_collection import DataCollector
 from feature_dynamics.predictors import TokenOnlyPredictor, StateTokenPredictor, save_predictor, load_predictor
@@ -96,14 +96,14 @@ def main():
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/.cache"),
-        help="Cache directory for data (default: /home/jffbrwn/orcd/pool/semantic-dynamics/.cache)"
+        default=_get_default_cache_dir(),
+        help="Cache directory for data (default: from FEATURE_DYNAMICS_CACHE_DIR or ./cache)"
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs"),
-        help="Output directory (default: /home/jffbrwn/orcd/pool/semantic-dynamics/outputs)"
+        default=_get_default_output_dir(),
+        help="Output directory (default: from FEATURE_DYNAMICS_OUTPUT_DIR or ./outputs)"
     )
     parser.add_argument(
         "--pre-relu",
