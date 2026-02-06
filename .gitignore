@@ -65,7 +65,8 @@ models/
 .huggingface/
 transformers_cache/
 torch_cache/
-
+*/.cache/
+*/outputs/
 # Jupyter
 .ipynb_checkpoints/
 *-checkpoint.ipynb
