@@ -19,8 +19,8 @@ import numpy as np
 from tqdm import tqdm
 from typing import List, Dict, Optional
 
-from feature_dynamics.config import Config
-from feature_dynamics.data_collection import DataCollector
+from ..config import Config
+from ..data_collection import DataCollector
 
 
 def collect_multi_trial_data(

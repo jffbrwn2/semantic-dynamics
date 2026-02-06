@@ -24,7 +24,7 @@ from transformers.masking_utils import (
     create_sliding_window_causal_mask
 )
 
-from feature_dynamics.prompts import PromptGenerator
+from ..prompts import PromptGenerator
 
 
 class SAEModel:

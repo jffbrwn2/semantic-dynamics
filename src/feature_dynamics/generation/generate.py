@@ -20,7 +20,7 @@ from transformers.masking_utils import (
     create_sliding_window_causal_mask
 )
 
-from feature_dynamics.predictors import load_predictor
+from ..predictors import load_predictor
 
 
 class SAEModel:

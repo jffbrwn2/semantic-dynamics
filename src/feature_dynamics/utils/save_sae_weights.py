@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 from sae_lens import SAE
 
-from feature_dynamics.config import Config
+from ..config import Config
 
 
 def extract_sae_weights(sae: SAE) -> dict:
