@@ -43,80 +43,117 @@ where:
 
 ```bash
 # Clone the repository
-cd feature-dynamics
+cd semantic-dynamics
 
-# Activate the UV environment (automatically created)
+# Activate the virtual environment
 source .venv/bin/activate
 
-# Verify installation
-uv run feature-dynamics --help
+# Change to the feature_dynamics source directory
+cd src/feature_dynamics
 ```
+
+### Configuration
+
+Copy the example environment file and set your paths:
+
+```bash
+cp .env.example .env
+# Edit .env with your cache and output directories
+```
+
+Environment variables:
+- `FEATURE_DYNAMICS_CACHE_DIR`: Directory for cached datasets
+- `FEATURE_DYNAMICS_OUTPUT_DIR`: Directory for outputs (models, results)
+
+If not set, defaults to `./cache` and `./outputs` in the current directory.
 
 ## Usage
 
-### Basic Usage (CPU, for testing)
+All commands should be run from `src/feature_dynamics/` with the environment activated.
+
+### Main Analysis Pipeline
 
 ```bash
-# Run full pipeline on CPU with reduced parameters
-uv run feature-dynamics \
-    --device cpu \
-    --layer 20 \
-    --top-k 256 \
-    --num-prompts 50 \
-    --alpha 10.0
+# Run full pipeline (prompts -> collect -> train -> evaluate)
+python -m feature_dynamics.main --help
+
+# Example: Run on GPU with default parameters
+python -m feature_dynamics.main --device cuda --layer 31 --top-k 512
 ```
 
-### Production Usage (GPU)
+### Text Generation with Learned Dynamics
 
 ```bash
-# Run full pipeline on GPU
-uv run feature-dynamics \
-    --device cuda \
-    --layer 20 \
-    --top-k 512 \
-    --num-prompts 200 \
-    --alpha 10.0
+# Generate text using a trained predictor
+python -m feature_dynamics.generation.generate \
+    --predictor /path/to/predictor.pkl \
+    --sae-model /path/to/sae_weights.pkl \
+    --prompt "Your prompt here" \
+    --max-tokens 100
 ```
 
-### Using Cached Data
-
-After initial data collection, you can skip collection and rerun analysis:
+### LFADS Training
 
 ```bash
-uv run feature-dynamics \
-    --skip-collection \
-    --alpha 5.0
+# Train LFADS model on collected trial data
+python -m feature_dynamics.lfads \
+    --data-dir /path/to/trials_data \
+    --output-dir /path/to/output \
+    --epochs 100
 ```
 
-### Command-Line Arguments
+### Data Collection
 
-- `--layer`: Layer index to analyze (default: 20)
-- `--top-k`: Number of top features to select (default: 512)
-- `--num-prompts`: Total number of prompts (default: 200)
-- `--alpha`: Ridge regularization parameter (default: 10.0)
-- `--device`: Device (cpu/cuda/mps, default: cpu)
-- `--skip-collection`: Skip data collection (use cached data)
-- `--cache-dir`: Cache directory (default: .cache)
-- `--output-dir`: Output directory (default: outputs)
+```bash
+# Collect multi-trial data for LFADS training
+python -m feature_dynamics.generation.collect_trials --help
+```
+
+### Analysis & Visualization
+
+```bash
+# Evaluate SAE reconstruction ceiling
+python -m feature_dynamics.analysis.evaluate_sae_ceiling --help
+
+# Plot feature dynamics
+python -m feature_dynamics.analysis.plot_dynamics --help
+```
 
 
 
 ## Project Structure
 
 ```
-feature-dynamics/
+semantic-dynamics/
 ├── src/feature_dynamics/
 │   ├── __init__.py           # Package exports
 │   ├── config.py             # Configuration dataclass
 │   ├── prompts.py            # Prompt generation across styles
 │   ├── data_collection.py    # Model inference + SAE activation collection
-│   ├── predictors.py         # Token-only and state+token predictors
+│   ├── predictors.py         # Linear predictors (TokenOnly, StateToken, LFADS)
 │   ├── evaluation.py         # R² metrics and comparison
-│   └── main.py               # Main entry point
+│   ├── main.py               # Main entry point
+│   ├── analysis/             # Analysis and visualization scripts
+│   │   ├── evaluate_sae_ceiling.py
+│   │   ├── scale_features.py
+│   │   ├── plot_dynamics.py
+│   │   └── plot_dynamics_comparison.py
+│   ├── generation/           # Text generation and data collection
+│   │   ├── generate.py       # Predictor-driven text generation
+│   │   └── collect_trials.py # Multi-trial data collection for LFADS
+│   ├── rnn/                  # RNN-based predictors
+│   │   └── train_rnn.py
+│   ├── utils/                # Utility scripts
+│   │   └── save_sae_weights.py
+│   ├── lfads/                # LFADS model and training
+│   │   ├── model.py          # LFADS architecture
+│   │   ├── training.py       # Dataset and trainer classes
+│   │   └── train.py          # Training entry point
+│   └── notebooks/            # Jupyter notebooks for exploration
 ├── outputs/                  # Results and trained models
 ├── .cache/                   # Cached datasets
-├── pyproject.toml           # Project configuration
-└── README.md                # This file
+├── pyproject.toml            # Project configuration
+└── README.md                 # This file
 ```
 
 ## Advanced Usage

@@ -1,7 +1,29 @@
 """Configuration for SAE feature dynamics analysis."""
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+
+def _get_default_cache_dir() -> Path:
+    """Get cache directory from environment or default."""
+    env_path = os.environ.get("FEATURE_DYNAMICS_CACHE_DIR")
+    if env_path:
+        return Path(env_path)
+    return Path.cwd() / ".cache"
+
+
+def _get_default_output_dir() -> Path:
+    """Get output directory from environment or default."""
+    env_path = os.environ.get("FEATURE_DYNAMICS_OUTPUT_DIR")
+    if env_path:
+        return Path(env_path)
+    return Path.cwd() / "outputs"
 
 
 @dataclass
@@ -36,9 +58,9 @@ class Config:
     ridge_alpha: float = 10.0  # Ridge regression regularization
     fit_per_feature: bool = True  # Fit separate model per feature vs joint
 
-    # Output
-    output_dir: Path = Path("/home/jffbrwn/orcd/pool/semantic-dynamics/outputs")
-    cache_dir: Path = Path("/home/jffbrwn/orcd/pool/semantic-dynamics/.cache")
+    # Output (defaults from environment variables or ./outputs and ./.cache)
+    output_dir: Path = field(default_factory=_get_default_output_dir)
+    cache_dir: Path = field(default_factory=_get_default_cache_dir)
 
     def __post_init__(self):
         """Initialize derived configuration."""
